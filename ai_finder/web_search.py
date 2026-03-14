@@ -376,11 +376,15 @@ class WebSearcher:
                     href = qs["q"][0]
 
             # --- unwrap DuckDuckGo redirect parameter ---
-            if "duckduckgo.com" in href and "uddg=" in href:
-                parsed_ddg = urlparse(href)
-                qs = parse_qs(parsed_ddg.query)
-                if "uddg" in qs:
-                    href = qs["uddg"][0]
+            # Parse the URL first to safely check the netloc before inspecting
+            # the query string, preventing substring-matching on the full href.
+            if href.startswith(("http://", "https://")):
+                parsed_early = urlparse(href)
+                early_netloc = parsed_early.netloc.lower()
+                if early_netloc in ("duckduckgo.com", "www.duckduckgo.com"):
+                    qs = parse_qs(parsed_early.query)
+                    if "uddg" in qs:
+                        href = qs["uddg"][0]
 
             # Only keep external http(s) URLs
             if not href.startswith(("http://", "https://")):

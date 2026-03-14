@@ -359,6 +359,8 @@ class Crawler:
         # Web search dorking (Google, DuckDuckGo, Yandex)
         if use_web_search:
             log.info("crawl  web_search  engines=%s", web_search_engines)
+            # Deferred import avoids a hard dependency on web_search for users
+            # who never enable this feature, and prevents any circular-import risk.
             from ai_finder.web_search import WebSearcher  # noqa: PLC0415
 
             async with WebSearcher(timeout=self._timeout) as searcher:
