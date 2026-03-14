@@ -3,7 +3,14 @@
 import hashlib
 import pytest
 
-from ai_finder.extractor import FileExtractor, ExtractedFile, github_html_to_raw
+from ai_finder.extractor import (
+    FileExtractor,
+    ExtractedFile,
+    github_html_to_raw,
+    gitlab_html_to_raw,
+    bitbucket_html_to_raw,
+    to_raw_url,
+)
 
 
 class TestGithubHtmlToRaw:
@@ -29,6 +36,80 @@ class TestGithubHtmlToRaw:
         result = github_html_to_raw(url)
         assert "dir/sub/AGENTS.md" in result
         assert result.startswith("https://raw.githubusercontent.com/")
+
+
+class TestGitlabHtmlToRaw:
+    def test_blob_url_converted(self):
+        url = "https://gitlab.com/user/repo/-/blob/main/CLAUDE.md"
+        result = gitlab_html_to_raw(url)
+        assert "/-/raw/" in result
+        assert "/-/blob/" not in result
+        assert result.startswith("https://gitlab.com/")
+
+    def test_raw_url_unchanged(self):
+        url = "https://gitlab.com/user/repo/-/raw/main/CLAUDE.md"
+        assert gitlab_html_to_raw(url) == url
+
+    def test_non_gitlab_url_unchanged(self):
+        url = "https://github.com/user/repo/blob/main/file.md"
+        assert gitlab_html_to_raw(url) == url
+
+    def test_nested_path_preserved(self):
+        url = "https://gitlab.com/user/repo/-/blob/main/dir/AGENTS.md"
+        result = gitlab_html_to_raw(url)
+        assert "dir/AGENTS.md" in result
+
+    def test_subdomain_gitlab_converted(self):
+        url = "https://gitlab.example.com/user/repo/-/blob/main/CLAUDE.md"
+        result = gitlab_html_to_raw(url)
+        assert "/-/raw/" in result
+
+
+class TestBitbucketHtmlToRaw:
+    def test_src_url_converted(self):
+        url = "https://bitbucket.org/user/repo/src/main/CLAUDE.md"
+        result = bitbucket_html_to_raw(url)
+        assert "/raw/" in result
+        assert "/src/" not in result
+        assert result.startswith("https://bitbucket.org/")
+
+    def test_non_bitbucket_url_unchanged(self):
+        url = "https://github.com/user/repo/blob/main/file.md"
+        assert bitbucket_html_to_raw(url) == url
+
+    def test_nested_path_preserved(self):
+        url = "https://bitbucket.org/user/repo/src/main/dir/AGENTS.md"
+        result = bitbucket_html_to_raw(url)
+        assert "dir/AGENTS.md" in result
+
+    def test_non_src_bitbucket_url_unchanged(self):
+        url = "https://bitbucket.org/user/repo"
+        assert bitbucket_html_to_raw(url) == url
+
+
+class TestToRawUrl:
+    def test_dispatches_github(self):
+        url = "https://github.com/user/repo/blob/main/CLAUDE.md"
+        result = to_raw_url(url)
+        assert result.startswith("https://raw.githubusercontent.com/")
+
+    def test_dispatches_gitlab(self):
+        url = "https://gitlab.com/user/repo/-/blob/main/CLAUDE.md"
+        result = to_raw_url(url)
+        assert "/-/raw/" in result
+
+    def test_dispatches_bitbucket(self):
+        url = "https://bitbucket.org/user/repo/src/main/CLAUDE.md"
+        result = to_raw_url(url)
+        assert "/raw/" in result
+
+    def test_unknown_host_unchanged(self):
+        url = "https://example.com/some/file.md"
+        assert to_raw_url(url) == url
+
+    def test_already_raw_github_unchanged(self):
+        url = "https://raw.githubusercontent.com/user/repo/main/CLAUDE.md"
+        assert to_raw_url(url) == url
 
 
 class TestExtractedFile:

@@ -4,6 +4,8 @@ discovery.py — Search-query / dork generation module.
 Produces:
   - Google dork strings targeting AI agent config files.
   - GitHub Code Search API query strings.
+  - GitLab Search API query strings.
+  - S3 bucket discovery dorks.
 """
 
 from __future__ import annotations
@@ -65,6 +67,18 @@ TARGET_PATHS: list[str] = [
     "config/",
     "src/agents/",
     "docs/",
+]
+
+#: S3-specific search terms for exposed AI configuration files.
+S3_DORK_TERMS: list[str] = [
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".cursorrules",
+    "system_prompt",
+    "agent_config",
+    "openai_config",
+    "langchain_config",
+    "crewai_config",
 ]
 
 
@@ -250,6 +264,116 @@ class GitHubQueryGenerator:
             self.path_queries,
             self.combined_queries,
             self.extension_queries,
+        ):
+            for q in gen():
+                if q.query not in seen:
+                    seen.add(q.query)
+                    result.append(q)
+        return result
+
+
+# ---------------------------------------------------------------------------
+# GitLab search query generator
+# ---------------------------------------------------------------------------
+
+
+class GitLabQueryGenerator:
+    """Generates GitLab Search API query strings.
+
+    Reference: https://docs.gitlab.com/ee/api/search.html
+    Uses the ``blobs`` scope to search file contents across all public projects.
+    """
+
+    def filename_queries(self) -> Iterator[SearchQuery]:
+        """One query per target filename (basename only)."""
+        for fname in TARGET_FILENAMES:
+            basename = fname.split("/")[-1]
+            yield SearchQuery(
+                platform="gitlab",
+                query=basename,
+                description=f"GitLab blob search for filename: {basename}",
+                tags=["filename", basename],
+            )
+
+    def content_queries(self) -> Iterator[SearchQuery]:
+        """One query per content signature."""
+        for sig in CONTENT_SIGNATURES:
+            yield SearchQuery(
+                platform="gitlab",
+                query=sig,
+                description=f"GitLab blob search for content: {sig!r}",
+                tags=["content-signature"],
+            )
+
+    def all_queries(self) -> list[SearchQuery]:
+        """Return full GitLab query list, deduplicated."""
+        seen: set[str] = set()
+        result: list[SearchQuery] = []
+        for gen in (self.filename_queries, self.content_queries):
+            for q in gen():
+                if q.query not in seen:
+                    seen.add(q.query)
+                    result.append(q)
+        return result
+
+
+# ---------------------------------------------------------------------------
+# S3 bucket dork generator
+# ---------------------------------------------------------------------------
+
+
+class S3DorkGenerator:
+    """Generates Google dorks and search patterns to discover exposed S3
+    buckets that contain AI agent configuration files.
+
+    Typical exposure vectors:
+    - Open S3 buckets indexed by search engines.
+    - S3 bucket listings linked from GitHub READMEs.
+    - AWS bucket names leaked in source code or CI configs.
+    """
+
+    _S3_LISTING_TMPL = 'site:s3.amazonaws.com "{term}"'
+    _S3_CUSTOM_DOMAIN_TMPL = 'site:*.s3.amazonaws.com "{term}"'
+    _S3_BUCKET_GITHUB_TMPL = 's3.amazonaws.com "{term}" site:github.com'
+
+    def s3_listing_dorks(self) -> Iterator[SearchQuery]:
+        """Dorks targeting open S3 bucket directory listings."""
+        for term in S3_DORK_TERMS:
+            yield SearchQuery(
+                platform="google",
+                query=self._S3_LISTING_TMPL.format(term=term),
+                description=f"S3 public listing containing: {term}",
+                tags=["s3", "listing"],
+            )
+
+    def s3_custom_domain_dorks(self) -> Iterator[SearchQuery]:
+        """Dorks targeting custom-domain S3 buckets."""
+        for term in S3_DORK_TERMS:
+            yield SearchQuery(
+                platform="google",
+                query=self._S3_CUSTOM_DOMAIN_TMPL.format(term=term),
+                description=f"S3 custom domain containing: {term}",
+                tags=["s3", "custom-domain"],
+            )
+
+    def s3_github_leak_dorks(self) -> Iterator[SearchQuery]:
+        """Dorks for S3 bucket URLs leaked in GitHub repositories."""
+        for term in S3_DORK_TERMS:
+            yield SearchQuery(
+                platform="google",
+                query=self._S3_BUCKET_GITHUB_TMPL.format(term=term),
+                description=f"S3 URL leaked in GitHub for: {term}",
+                tags=["s3", "github-leak"],
+            )
+
+    def all_dorks(self) -> list[SearchQuery]:
+        """Return full S3 dork list, deduplicated."""
+        seen: set[str] = set()
+        result: list[SearchQuery] = []
+        for gen in (
+            self.s3_listing_dorks,
+            self.s3_custom_domain_dorks,
+            self.s3_github_leak_dorks,
         ):
             for q in gen():
                 if q.query not in seen:

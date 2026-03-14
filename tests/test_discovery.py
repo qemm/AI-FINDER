@@ -5,9 +5,12 @@ import pytest
 from ai_finder.discovery import (
     GoogleDorkGenerator,
     GitHubQueryGenerator,
+    GitLabQueryGenerator,
+    S3DorkGenerator,
     SearchQuery,
     TARGET_FILENAMES,
     CONTENT_SIGNATURES,
+    S3_DORK_TERMS,
 )
 
 
@@ -96,3 +99,77 @@ class TestGitHubQueryGenerator:
 
     def test_all_queries_non_empty(self):
         assert len(self.gen.all_queries()) > 0
+
+
+class TestGitLabQueryGenerator:
+    def setup_method(self):
+        self.gen = GitLabQueryGenerator()
+
+    def test_filename_queries_platform(self):
+        queries = list(self.gen.filename_queries())
+        assert len(queries) == len(TARGET_FILENAMES)
+        for q in queries:
+            assert q.platform == "gitlab"
+
+    def test_filename_queries_use_basename(self):
+        queries = list(self.gen.filename_queries())
+        for q in queries:
+            # Query should be a bare filename (basename only)
+            assert "/" not in q.query
+
+    def test_content_queries_returned(self):
+        queries = list(self.gen.content_queries())
+        assert len(queries) == len(CONTENT_SIGNATURES)
+        for q in queries:
+            assert q.platform == "gitlab"
+
+    def test_all_queries_unique(self):
+        queries = self.gen.all_queries()
+        raw = [q.query for q in queries]
+        assert len(raw) == len(set(raw))
+
+    def test_all_queries_non_empty(self):
+        assert len(self.gen.all_queries()) > 0
+
+    def test_claude_md_in_queries(self):
+        queries = list(self.gen.filename_queries())
+        assert any("CLAUDE.md" in q.query for q in queries)
+
+
+class TestS3DorkGenerator:
+    def setup_method(self):
+        self.gen = S3DorkGenerator()
+
+    def test_s3_listing_dorks_platform(self):
+        dorks = list(self.gen.s3_listing_dorks())
+        assert len(dorks) == len(S3_DORK_TERMS)
+        for d in dorks:
+            assert d.platform == "google"
+            assert "s3.amazonaws.com" in d.query
+
+    def test_s3_custom_domain_dorks(self):
+        dorks = list(self.gen.s3_custom_domain_dorks())
+        assert len(dorks) == len(S3_DORK_TERMS)
+        for d in dorks:
+            assert "s3.amazonaws.com" in d.query
+
+    def test_s3_github_leak_dorks(self):
+        dorks = list(self.gen.s3_github_leak_dorks())
+        assert len(dorks) == len(S3_DORK_TERMS)
+        for d in dorks:
+            assert "github.com" in d.query
+            assert "s3.amazonaws.com" in d.query
+
+    def test_all_dorks_unique(self):
+        dorks = self.gen.all_dorks()
+        queries = [d.query for d in dorks]
+        assert len(queries) == len(set(queries))
+
+    def test_all_dorks_non_empty(self):
+        assert len(self.gen.all_dorks()) > 0
+
+    def test_all_dorks_cover_all_terms(self):
+        dorks = self.gen.all_dorks()
+        dork_text = " ".join(d.query for d in dorks)
+        for term in S3_DORK_TERMS:
+            assert term in dork_text, f"S3 term {term!r} not found in any dork"
