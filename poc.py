@@ -24,6 +24,12 @@ Usage
     # Crawl GitHub/GitLab APIs and update urls.txt
     python poc.py --crawl --token <GITHUB_TOKEN> --urls-file urls.txt
 
+    # Enumerate AI config paths on a specific domain (gobuster / wfuzz style)
+    python poc.py --crawl --target https://example.com --no-github --no-gitlab --urls-file urls.txt
+
+    # Combine API search with direct path enumeration
+    python poc.py --crawl --token <GITHUB_TOKEN> --target https://example.com --urls-file urls.txt
+
     # Just print the generated dorks / queries
     python poc.py --list-dorks
     python poc.py --list-s3-dorks
@@ -103,6 +109,8 @@ async def run_crawl(args: argparse.Namespace) -> None:
     urls_file = args.urls_file or "urls.txt"
     print(f"[*] Crawling for AI agent config files…")
     print(f"    urls file : {urls_file}")
+    if args.target:
+        print(f"    target    : {args.target}")
 
     crawler = Crawler(
         github_token=args.token,
@@ -111,6 +119,7 @@ async def run_crawl(args: argparse.Namespace) -> None:
 
     new_urls = await crawler.crawl(
         urls_file=urls_file,
+        target_url=args.target,
         use_github=not args.no_github,
         use_gitlab=not args.no_gitlab,
         max_queries=args.max_queries,
@@ -358,6 +367,18 @@ def parse_args() -> argparse.Namespace:
         metavar="FILE",
         default="urls.txt",
         help="Path to the URLs text file updated by --crawl (default: urls.txt).",
+    )
+    parser.add_argument(
+        "--target",
+        metavar="URL",
+        default=None,
+        help=(
+            "Base URL of a target domain to enumerate AI config file paths "
+            "against (e.g. https://example.com).  The crawler will probe "
+            "each known AI config filename directly under this URL — similar "
+            "to how gobuster or wfuzz discover paths — in addition to any "
+            "GitHub/GitLab API search results.  Use with --crawl."
+        ),
     )
     parser.add_argument(
         "--no-github",

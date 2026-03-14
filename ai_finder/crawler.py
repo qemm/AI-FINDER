@@ -3,6 +3,8 @@ crawler.py — URL discovery and crawling module.
 
 Searches GitHub and GitLab Code Search APIs using the query strings generated
 by :mod:`ai_finder.discovery` to find AI agent configuration file URLs.
+Also supports path enumeration against a target domain URL — similar to tools
+like gobuster or wfuzz — by probing well-known AI config file paths directly.
 Each candidate URL is checked for HTTP reachability; confirmed URLs are
 merged into a ``urls.txt`` file (one URL per line) so the rest of the
 pipeline can consume them.
@@ -12,8 +14,15 @@ Typical usage
     import asyncio
     from ai_finder.crawler import Crawler
 
+    # API-based discovery (GitHub / GitLab search)
     crawler = Crawler(github_token="ghp_…")
     new_urls = asyncio.run(crawler.crawl(urls_file="urls.txt"))
+    print(f"Found {len(new_urls)} new URL(s).")
+
+    # Path-enumeration mode (gobuster / wfuzz style)
+    new_urls = asyncio.run(
+        crawler.crawl(urls_file="urls.txt", target_url="https://example.com")
+    )
     print(f"Found {len(new_urls)} new URL(s).")
 """
 
@@ -22,10 +31,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urljoin
 
 import aiohttp
 
-from ai_finder.discovery import GitHubQueryGenerator, GitLabQueryGenerator
+from ai_finder.discovery import GitHubQueryGenerator, GitLabQueryGenerator, TARGET_FILENAMES
 from ai_finder.extractor import DEFAULT_HEADERS, DEFAULT_TIMEOUT, FileExtractor
 
 # ---------------------------------------------------------------------------
@@ -161,10 +171,52 @@ class Crawler:
 
         return [url for url, ok in results if ok]
 
+    async def enumerate_paths(
+        self,
+        target_url: str,
+        *,
+        paths: Optional[list[str]] = None,
+        check_reachability: bool = True,
+    ) -> list[str]:
+        """Enumerate AI config file paths from *target_url* (gobuster / wfuzz style).
+
+        Constructs candidate URLs by joining *target_url* with each path in
+        *paths* (defaulting to :data:`ai_finder.discovery.TARGET_FILENAMES`)
+        and — when *check_reachability* is ``True`` — filters them to only
+        those that return a successful HTTP response.
+
+        Parameters
+        ----------
+        target_url:
+            The base URL to start from (e.g. ``https://example.com``).
+        paths:
+            Explicit list of paths to probe.  When ``None`` (default),
+            :data:`ai_finder.discovery.TARGET_FILENAMES` is used.
+        check_reachability:
+            When ``True`` (the default) each candidate URL is verified via
+            an HTTP request before being returned.
+
+        Returns
+        -------
+        list[str]
+            Candidate (and optionally verified reachable) URLs found under
+            *target_url*.
+        """
+        if paths is None:
+            paths = list(TARGET_FILENAMES)
+
+        base = target_url.rstrip("/") + "/"
+        candidates = [urljoin(base, p.lstrip("/")) for p in paths]
+
+        if check_reachability:
+            return await self.filter_reachable(candidates)
+        return candidates
+
     async def crawl(
         self,
         urls_file: str = "urls.txt",
         *,
+        target_url: Optional[str] = None,
         use_github: bool = True,
         use_gitlab: bool = True,
         max_queries: Optional[int] = None,
@@ -177,15 +229,24 @@ class Crawler:
         -----
         1. Load any URLs already present in *urls_file*.
         2. Discover new candidate URLs via the GitHub / GitLab search APIs.
-        3. Exclude candidates that already appear in *urls_file*.
-        4. Optionally filter candidates to reachable URLs only.
-        5. Merge verified URLs with the existing set and rewrite *urls_file*.
+        3. If *target_url* is provided, enumerate known AI config file paths
+           directly against that domain (gobuster / wfuzz style).
+        4. Exclude candidates that already appear in *urls_file*.
+        5. Optionally filter candidates to reachable URLs only.
+        6. Merge verified URLs with the existing set and rewrite *urls_file*.
 
         Parameters
         ----------
         urls_file:
             Path to the text file that holds discovered URLs (one per line).
             The file is created if it does not yet exist.
+        target_url:
+            Optional base URL of a domain to enumerate AI config file paths
+            against (e.g. ``https://example.com``).  When provided, the
+            crawler probes every path in
+            :data:`ai_finder.discovery.TARGET_FILENAMES` directly — similar
+            to how gobuster or wfuzz discover URL paths — in addition to any
+            API-based search results.
         use_github:
             Enable GitHub Code Search.
         use_gitlab:
@@ -210,6 +271,16 @@ class Crawler:
             max_queries=max_queries,
             per_page=per_page,
         )
+
+        # Path enumeration against the target domain (gobuster / wfuzz style)
+        if target_url:
+            path_candidates = await self.enumerate_paths(
+                target_url, check_reachability=False
+            )
+            candidates.extend(path_candidates)
+
+        # Deduplicate candidates while preserving order
+        candidates = list(dict.fromkeys(candidates))
 
         # Only process URLs that are not already recorded
         new_candidates = [u for u in candidates if u not in existing]

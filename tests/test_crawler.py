@@ -436,3 +436,145 @@ class TestCrawlerCrawl:
         assert result == []
         # File should not be created when nothing was found
         assert not Path(urls_file).exists()
+
+    def test_crawl_with_target_url_enumerates_paths(self, tmp_path):
+        crawler = Crawler()
+        urls_file = str(tmp_path / "urls.txt")
+        target = "https://example.com"
+        found_url = "https://example.com/CLAUDE.md"
+
+        async def _run():
+            with patch.object(
+                crawler,
+                "discover_urls",
+                new=AsyncMock(return_value=[]),
+            ), patch.object(
+                crawler,
+                "enumerate_paths",
+                new=AsyncMock(return_value=[found_url]),
+            ) as mock_enum, patch.object(
+                crawler,
+                "filter_reachable",
+                new=AsyncMock(return_value=[found_url]),
+            ):
+                result = await crawler.crawl(
+                    urls_file=urls_file, target_url=target
+                )
+                mock_enum.assert_called_once_with(target, check_reachability=False)
+                return result
+
+        result = asyncio.run(_run())
+        assert result == [found_url]
+        assert found_url in load_urls(urls_file)
+
+    def test_crawl_target_url_deduplicates_with_api_results(self, tmp_path):
+        crawler = Crawler()
+        urls_file = str(tmp_path / "urls.txt")
+        shared_url = "https://example.com/CLAUDE.md"
+
+        async def _run():
+            with patch.object(
+                crawler,
+                "discover_urls",
+                new=AsyncMock(return_value=[shared_url]),
+            ), patch.object(
+                crawler,
+                "enumerate_paths",
+                new=AsyncMock(return_value=[shared_url]),
+            ), patch.object(
+                crawler,
+                "filter_reachable",
+                new=AsyncMock(return_value=[shared_url]),
+            ):
+                return await crawler.crawl(
+                    urls_file=urls_file,
+                    target_url="https://example.com",
+                )
+
+        result = asyncio.run(_run())
+        # Despite appearing from both sources, the URL should appear only once
+        assert result.count(shared_url) == 1
+
+
+# ---------------------------------------------------------------------------
+# Crawler.enumerate_paths tests
+# ---------------------------------------------------------------------------
+
+
+class TestCrawlerEnumeratePaths:
+    def test_enumerate_paths_builds_candidates_from_target(self):
+        crawler = Crawler()
+        target = "https://example.com"
+
+        async def _run():
+            return await crawler.enumerate_paths(
+                target, check_reachability=False
+            )
+
+        result = asyncio.run(_run())
+        assert "https://example.com/CLAUDE.md" in result
+        assert "https://example.com/AGENTS.md" in result
+        assert "https://example.com/.cursorrules" in result
+
+    def test_enumerate_paths_strips_trailing_slash_from_base(self):
+        crawler = Crawler()
+
+        async def _run():
+            return await crawler.enumerate_paths(
+                "https://example.com/", check_reachability=False
+            )
+
+        result = asyncio.run(_run())
+        # Should not produce double slashes
+        assert all("example.com//" not in url for url in result)
+        assert "https://example.com/CLAUDE.md" in result
+
+    def test_enumerate_paths_uses_custom_paths(self):
+        crawler = Crawler()
+        custom_paths = ["custom/path.md", "other/file.txt"]
+
+        async def _run():
+            return await crawler.enumerate_paths(
+                "https://example.com",
+                paths=custom_paths,
+                check_reachability=False,
+            )
+
+        result = asyncio.run(_run())
+        assert result == [
+            "https://example.com/custom/path.md",
+            "https://example.com/other/file.txt",
+        ]
+
+    def test_enumerate_paths_filters_reachable(self):
+        crawler = Crawler()
+
+        async def _run():
+            with patch.object(
+                crawler,
+                "filter_reachable",
+                new=AsyncMock(
+                    return_value=["https://example.com/CLAUDE.md"]
+                ),
+            ) as mock_filter:
+                result = await crawler.enumerate_paths(
+                    "https://example.com", check_reachability=True
+                )
+                mock_filter.assert_called_once()
+                return result
+
+        result = asyncio.run(_run())
+        assert result == ["https://example.com/CLAUDE.md"]
+
+    def test_enumerate_paths_covers_all_default_filenames(self):
+        from ai_finder.discovery import TARGET_FILENAMES
+
+        crawler = Crawler()
+
+        async def _run():
+            return await crawler.enumerate_paths(
+                "https://example.com", check_reachability=False
+            )
+
+        result = asyncio.run(_run())
+        assert len(result) == len(TARGET_FILENAMES)
