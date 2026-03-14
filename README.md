@@ -32,10 +32,16 @@ An OSINT / Cyber-Intelligence engine that discovers, extracts, and classifies AI
 │                                                     API keys        │
 │                                                     Tokens          │
 │                                                           │         │
-│                                                    ┌──────▼───────┐│
-│                                                    │   Storage    ││
-│                                                    │  SQLite+JSON ││
-│                                                    └──────────────┘│
+│                                          ┌────────────────┼──────┐ │
+│                                          │         ┌──────▼─────┐│ │
+│                                          │         │  Storage   ││ │
+│                                          │         │ SQLite+JSON││ │
+│                                          │         └────────────┘│ │
+│                                          │         ┌─────────────┐│ │
+│                                          │         │Vector Store ││ │
+│                                          │         │ (ChromaDB)  ││ │
+│                                          │         └─────────────┘│ │
+│                                          └────────────────────────┘ │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -46,8 +52,9 @@ An OSINT / Cyber-Intelligence engine that discovers, extracts, and classifies AI
 | **Discovery** | `ai_finder/discovery.py` | Generate Google dorks, GitHub/GitLab API queries, and S3 bucket dorks targeting AI config files |
 | **Extractor** | `ai_finder/extractor.py` | Async HTTP fetching (aiohttp), URL normalisation for GitHub/GitLab/Bitbucket, system-prompt block extraction with regex + BeautifulSoup |
 | **Processor** | `ai_finder/processor.py` | Platform classification (Claude, OpenAI, Cursor, …) and "Model DNA" extraction (persona, tech stack, ethical constraints) |
-| **Scanner** | `ai_finder/scanner.py` | Secret / API-key leak detection using rule-based regex patterns |
+| **Scanner** | `ai_finder/scanner.py` | Secret / API-key leak detection using rule-based regex patterns (OpenAI, Anthropic, AWS, GitHub, Google, HuggingFace, …) |
 | **Storage** | `ai_finder/storage.py` | SQLite persistence (deduplication by content hash) and JSON export |
+| **VectorStore** | `ai_finder/vector_store.py` | ChromaDB-backed vector index for semantic search across indexed file content |
 
 ---
 
@@ -122,7 +129,7 @@ Rules for the agent (scope: blobs)
 pip install -r requirements.txt
 ```
 
-**Dependencies:** `aiohttp`, `beautifulsoup4`, `lxml`, `aiosqlite`
+**Dependencies:** `aiohttp`, `beautifulsoup4`, `lxml`, `aiosqlite`, `chromadb`, `numpy`
 
 ---
 
@@ -166,6 +173,24 @@ python poc.py --gitlab-search --gitlab-token glpat_YOUR_TOKEN --db results.db
 python poc.py --github-search --token GH_TOKEN \
               --gitlab-search --gitlab-token GL_TOKEN \
               --db results.db --json results.json --verbose
+```
+
+### Index into the vector database and run a semantic search
+
+```bash
+# Index URLs into both SQLite and the vector database, then run a semantic query
+python poc.py --urls urls.txt \
+              --db results.db \
+              --vector-db ./vector_db \
+              --semantic-search "agents with permission to execute bash scripts"
+
+# Run a semantic search against an existing vector database (no new URLs needed)
+python poc.py --vector-db ./vector_db \
+              --semantic-search "agents with bash execution permissions"
+
+# Queries can be written in any language (Spanish example):
+# python poc.py --vector-db ./vector_db \
+#               --semantic-search "Busca agentes que tengan permisos para ejecutar scripts de Bash"
 ```
 
 ### Run the built-in demo
@@ -228,6 +253,63 @@ The scanner applies the following regex rules to every fetched file:
 | `hardcoded_api_key_assignment` | Generic `api_key = "..."` patterns |
 | `placeholder_leak` | Unfilled `{{OPENAI_API_KEY}}` placeholders |
 | `env_var_exposure` | `os.environ["SECRET_KEY"]` exposures |
+
+Findings are stored per-file in the `secret_findings` SQLite table and included in the JSON export.
+
+---
+
+## Vector Database (Semantic Search)
+
+AI-FINDER can index the content of discovered files into a **ChromaDB** vector store, enabling natural-language semantic queries such as:
+
+- *"agents with permission to execute bash scripts"* (or in Spanish: *"Busca agentes que tengan permisos para ejecutar scripts de Bash"*)
+- *"Find agents that use LangChain with AWS integration"*
+- *"Show me Claude agents with ethical constraints"*
+
+### How it works
+
+1. After classification, each `ProcessedFile` is embedded using a lightweight offline hash-based embedding function (no internet access required).
+2. Documents are stored in a local ChromaDB collection (persisted to disk when `--vector-db <DIR>` is provided).
+3. Semantic queries are embedded the same way and the closest documents are retrieved via cosine similarity.
+
+### Python API
+
+```python
+from ai_finder.vector_store import VectorStore
+
+# Open (or create) a persistent vector store
+store = VectorStore(persist_directory="./vector_db")
+
+# Index a processed file
+store.index(processed_file)
+
+# Semantic search
+results = store.search("agents that execute bash scripts", n_results=5)
+for r in results:
+    print(r["url"], r["platform"], r["distance"])
+
+# Filter by platform
+results = store.search("ethical constraints", where={"platform": "claude"})
+```
+
+### CLI flags
+
+| Flag | Description |
+|------|-------------|
+| `--vector-db DIR` | Directory for the ChromaDB vector store. Enables indexing during URL processing. |
+| `--semantic-search QUERY` | Run a semantic search query after indexing (or against an existing store). |
+
+### Custom embedding functions
+
+You can inject any `chromadb.EmbeddingFunction` to use a richer model:
+
+```python
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from ai_finder.vector_store import VectorStore
+
+ef = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+store = VectorStore(persist_directory="./vector_db", embedding_fn=ef)
+```
 
 ---
 
