@@ -41,6 +41,7 @@ from ai_finder.extractor import FileExtractor
 from ai_finder.processor import FileProcessor
 from ai_finder.scanner import SecretScanner
 from ai_finder.storage import Storage
+from ai_finder.vector_store import VectorStore
 
 # ---------------------------------------------------------------------------
 # Demo URLs — a small set of real, publicly visible AI config files on GitHub
@@ -107,10 +108,25 @@ async def run_pipeline(
     gitlab_token: str | None,
     gitlab_search: bool,
     verbose: bool,
+    vector_db_path: str | None = None,
+    semantic_query: str | None = None,
 ) -> None:
     storage = Storage(db_path)
     processor = FileProcessor()
     scanner = SecretScanner()
+
+    # Initialise vector store if requested
+    vector_store: VectorStore | None = None
+    if vector_db_path is not None or semantic_query is not None:
+        vdb_dir = vector_db_path or "vector_db"
+        vector_store = VectorStore(persist_directory=vdb_dir)
+        print(f"[i] Vector store initialised at '{vdb_dir}' "
+              f"({vector_store.count()} documents already indexed).")
+
+    # If a semantic query is provided without URLs, run search-only mode
+    if semantic_query and not urls and not (github_search or gitlab_search):
+        _run_semantic_search(vector_store, semantic_query, verbose)
+        return
 
     async with FileExtractor(github_token=github_token) as extractor:
         # Optionally expand URL list via GitHub Code Search
@@ -154,6 +170,8 @@ async def run_pipeline(
         secret_report = scanner.report(ef.raw_content, ef.url)
 
         row_id = storage.save(processed)
+        if vector_store is not None:
+            vector_store.index(processed)
         saved += 1
 
         print(f"  [OK] {ef.url}")
@@ -176,12 +194,46 @@ async def run_pipeline(
 
     print(f"[✓] Saved {saved}/{len(extracted_files)} file(s) to '{db_path}'.")
 
+    if vector_store is not None:
+        print(f"[✓] Vector store now contains {vector_store.count()} document(s).")
+        if semantic_query:
+            _run_semantic_search(vector_store, semantic_query, verbose)
+
     if json_path:
         storage.export_json(json_path)
         print(f"[✓] JSON export written to '{json_path}'.")
 
     total = storage.count()
     print(f"[i] Total records in database: {total}")
+
+
+# ---------------------------------------------------------------------------
+# Semantic search helper
+# ---------------------------------------------------------------------------
+
+
+def _run_semantic_search(
+    vector_store: "VectorStore",
+    query: str,
+    verbose: bool,
+) -> None:
+    """Print semantic search results for *query* against *vector_store*."""
+    print(f"\n[*] Semantic search: \"{query}\"")
+    results = vector_store.search(query, n_results=10)
+    if not results:
+        print("    No results found (index may be empty).")
+        return
+    print(f"    {len(results)} result(s):\n")
+    for i, r in enumerate(results, start=1):
+        secrets_flag = " ⚠ [secrets]" if r["has_secrets"] else ""
+        print(f"  {i}. [{r['platform']}]{secrets_flag} {r['url']}")
+        print(f"     distance : {r['distance']}")
+        if r["tags"]:
+            print(f"     tags     : {r['tags']}")
+        if verbose:
+            excerpt = r["document"].replace("\n", " ")[:120]
+            print(f"     excerpt  : {excerpt}…")
+        print()
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +314,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print extra detail per file.",
     )
+    parser.add_argument(
+        "--vector-db",
+        metavar="DIR",
+        default=None,
+        help="Directory for the ChromaDB vector store (enables indexing).",
+    )
+    parser.add_argument(
+        "--semantic-search",
+        metavar="QUERY",
+        default=None,
+        help=(
+            "Run a semantic search against the vector store after indexing. "
+            "Example: --semantic-search \"agents with bash execution permissions\""
+        ),
+    )
     return parser.parse_args()
 
 
@@ -307,6 +374,8 @@ def main() -> None:
             gitlab_token=args.gitlab_token,
             gitlab_search=args.gitlab_search,
             verbose=args.verbose,
+            vector_db_path=args.vector_db,
+            semantic_query=args.semantic_search,
         )
     )
 
