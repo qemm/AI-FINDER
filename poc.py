@@ -21,6 +21,9 @@ Usage
     # Use GitLab Search API (token recommended)
     python poc.py --gitlab-search --gitlab-token <GITLAB_TOKEN> --db results.db
 
+    # Crawl GitHub/GitLab APIs and update urls.txt
+    python poc.py --crawl --token <GITHUB_TOKEN> --urls-file urls.txt
+
     # Just print the generated dorks / queries
     python poc.py --list-dorks
     python poc.py --list-s3-dorks
@@ -42,6 +45,7 @@ from ai_finder.processor import FileProcessor
 from ai_finder.scanner import SecretScanner
 from ai_finder.storage import Storage
 from ai_finder.vector_store import VectorStore
+from ai_finder.crawler import Crawler
 
 # ---------------------------------------------------------------------------
 # Demo URLs — a small set of real, publicly visible AI config files on GitHub
@@ -92,6 +96,33 @@ def print_gitlab_queries(args: argparse.Namespace) -> None:
     print(f"\n=== GitLab Search Queries ({len(queries)} total) ===\n")
     for q in queries:
         print(f"[{q.tags[0] if q.tags else 'general'}] {q.query}")
+
+
+async def run_crawl(args: argparse.Namespace) -> None:
+    """Crawl GitHub/GitLab APIs and update the urls.txt file."""
+    urls_file = args.urls_file or "urls.txt"
+    print(f"[*] Crawling for AI agent config files…")
+    print(f"    urls file : {urls_file}")
+
+    crawler = Crawler(
+        github_token=args.token,
+        gitlab_token=args.gitlab_token,
+    )
+
+    new_urls = await crawler.crawl(
+        urls_file=urls_file,
+        use_github=not args.no_github,
+        use_gitlab=not args.no_gitlab,
+        max_queries=args.max_queries,
+        check_reachability=not args.no_check,
+    )
+
+    if new_urls:
+        print(f"\n[✓] {len(new_urls)} new URL(s) added to '{urls_file}':")
+        for url in new_urls:
+            print(f"    {url}")
+    else:
+        print(f"\n[i] No new URLs found (file '{urls_file}' unchanged).")
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +346,42 @@ def parse_args() -> argparse.Namespace:
         help="Print extra detail per file.",
     )
     parser.add_argument(
+        "--crawl",
+        action="store_true",
+        help=(
+            "Crawl GitHub and GitLab APIs to discover AI agent config URLs "
+            "and update the urls file (see --urls-file)."
+        ),
+    )
+    parser.add_argument(
+        "--urls-file",
+        metavar="FILE",
+        default="urls.txt",
+        help="Path to the URLs text file updated by --crawl (default: urls.txt).",
+    )
+    parser.add_argument(
+        "--no-github",
+        action="store_true",
+        help="Skip GitHub Code Search during --crawl.",
+    )
+    parser.add_argument(
+        "--no-gitlab",
+        action="store_true",
+        help="Skip GitLab blob search during --crawl.",
+    )
+    parser.add_argument(
+        "--no-check",
+        action="store_true",
+        help="Skip reachability check during --crawl (write all discovered URLs).",
+    )
+    parser.add_argument(
+        "--max-queries",
+        metavar="N",
+        type=int,
+        default=None,
+        help="Limit the number of search queries sent per platform during --crawl.",
+    )
+    parser.add_argument(
         "--vector-db",
         metavar="DIR",
         default=None,
@@ -349,6 +416,10 @@ def main() -> None:
 
     if args.list_gitlab_queries:
         print_gitlab_queries(args)
+        return
+
+    if args.crawl:
+        asyncio.run(run_crawl(args))
         return
 
     urls: list[str] = []
