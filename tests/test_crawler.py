@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ai_finder.crawler import Crawler, load_urls, update_urls_file
+from ai_finder.crawler import Crawler, load_urls, update_urls_file, build_directory_paths
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ class TestCrawlerCheckUrl:
     def _make_crawler(self) -> Crawler:
         return Crawler()
 
-    def test_returns_true_for_2xx(self):
+    def test_returns_true_for_200(self):
         crawler = self._make_crawler()
 
         async def _run():
@@ -119,6 +119,40 @@ class TestCrawlerCheckUrl:
 
         result = asyncio.run(_run())
         assert result is True
+
+    def test_returns_false_for_401(self):
+        crawler = self._make_crawler()
+
+        async def _run():
+            mock_resp = MagicMock()
+            mock_resp.status = 401
+            mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+            mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+            mock_session = MagicMock()
+            mock_session.head = MagicMock(return_value=mock_resp)
+
+            return await crawler.check_url(mock_session, "https://example.com/private")
+
+        result = asyncio.run(_run())
+        assert result is False
+
+    def test_returns_false_for_403(self):
+        crawler = self._make_crawler()
+
+        async def _run():
+            mock_resp = MagicMock()
+            mock_resp.status = 403
+            mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+            mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+            mock_session = MagicMock()
+            mock_session.head = MagicMock(return_value=mock_resp)
+
+            return await crawler.check_url(mock_session, "https://example.com/forbidden")
+
+        result = asyncio.run(_run())
+        assert result is False
 
     def test_returns_false_for_404(self):
         crawler = self._make_crawler()
@@ -170,6 +204,30 @@ class TestCrawlerCheckUrl:
 
         result = asyncio.run(_run())
         assert result is True
+
+    def test_falls_back_to_get_on_405_returns_false_for_403(self):
+        """GET fallback after 405 must also reject 403."""
+        crawler = self._make_crawler()
+
+        async def _run():
+            head_resp = MagicMock()
+            head_resp.status = 405
+            head_resp.__aenter__ = AsyncMock(return_value=head_resp)
+            head_resp.__aexit__ = AsyncMock(return_value=False)
+
+            get_resp = MagicMock()
+            get_resp.status = 403
+            get_resp.__aenter__ = AsyncMock(return_value=get_resp)
+            get_resp.__aexit__ = AsyncMock(return_value=False)
+
+            mock_session = MagicMock()
+            mock_session.head = MagicMock(return_value=head_resp)
+            mock_session.get = MagicMock(return_value=get_resp)
+
+            return await crawler.check_url(mock_session, "https://example.com/file.md")
+
+        result = asyncio.run(_run())
+        assert result is False
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +518,9 @@ class TestCrawlerCrawl:
                 result = await crawler.crawl(
                     urls_file=urls_file, target_url=target
                 )
-                mock_enum.assert_called_once_with(target, check_reachability=False)
+                mock_enum.assert_called_once_with(
+                    target, check_reachability=False, depth=4
+                )
                 return result
 
         result = asyncio.run(_run())
@@ -577,4 +637,125 @@ class TestCrawlerEnumeratePaths:
             )
 
         result = asyncio.run(_run())
-        assert len(result) == len(TARGET_FILENAMES)
+        # Root-level filenames must all be present
+        for fname in TARGET_FILENAMES:
+            assert f"https://example.com/{fname}" in result
+        # Depth enumeration produces many more paths than just root filenames
+        assert len(result) > len(TARGET_FILENAMES)
+
+
+# ---------------------------------------------------------------------------
+# build_directory_paths helper tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDirectoryPaths:
+    def test_depth_zero_returns_target_filenames_only(self):
+        from ai_finder.discovery import TARGET_FILENAMES
+
+        result = build_directory_paths(max_depth=0)
+        assert result == list(TARGET_FILENAMES)
+
+    def test_depth_one_includes_root_and_one_level(self):
+        from ai_finder.discovery import TARGET_FILENAMES, COMMON_DIRECTORIES
+
+        result = build_directory_paths(max_depth=1)
+        # Root-level filenames must be present
+        for fname in TARGET_FILENAMES:
+            assert fname in result
+        # Depth-1 paths are those that start with a COMMON_DIRECTORIES entry
+        depth1_paths = [
+            p for p in result
+            if any(p.startswith(f"{d}/") for d in COMMON_DIRECTORIES)
+        ]
+        assert len(depth1_paths) > 0
+        for path in depth1_paths:
+            first_dir = path.split("/")[0]
+            assert first_dir in COMMON_DIRECTORIES
+
+    def test_depth_two_includes_two_level_paths(self):
+        result = build_directory_paths(max_depth=2)
+        two_level_paths = [p for p in result if p.count("/") == 2]
+        assert len(two_level_paths) > 0
+
+    def test_results_are_deduplicated(self):
+        result = build_directory_paths(max_depth=2)
+        assert len(result) == len(set(result))
+
+    def test_no_directory_repeats_within_single_path(self):
+        """Permutations must not repeat COMMON_DIRECTORIES entries in the same prefix."""
+        from ai_finder.discovery import COMMON_DIRECTORIES
+
+        result = build_directory_paths(max_depth=3)
+        for path in result:
+            # Extract only parts that come from COMMON_DIRECTORIES (the prefix)
+            dir_parts = [p for p in path.split("/") if p in COMMON_DIRECTORIES]
+            assert len(dir_parts) == len(set(dir_parts)), (
+                f"Repeated directory entry in: {path}"
+            )
+
+    def test_total_paths_grow_with_depth(self):
+        result_d1 = build_directory_paths(max_depth=1)
+        result_d2 = build_directory_paths(max_depth=2)
+        assert len(result_d2) > len(result_d1)
+
+
+# ---------------------------------------------------------------------------
+# Crawler.crawl web-search integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestCrawlerCrawlWebSearch:
+    def test_crawl_with_web_search_calls_web_searcher(self, tmp_path):
+        crawler = Crawler()
+        urls_file = str(tmp_path / "urls.txt")
+        web_url = "https://example.com/CLAUDE.md"
+
+        async def _run():
+            with patch.object(
+                crawler, "discover_urls", new=AsyncMock(return_value=[])
+            ), patch(
+                "ai_finder.web_search.WebSearcher.search_with_dorks",
+                new=AsyncMock(return_value=[web_url]),
+            ), patch.object(
+                crawler, "filter_reachable", new=AsyncMock(return_value=[web_url])
+            ):
+                return await crawler.crawl(
+                    urls_file=urls_file,
+                    use_github=False,
+                    use_gitlab=False,
+                    use_web_search=True,
+                    web_search_engines=("duckduckgo",),
+                    check_reachability=True,
+                )
+
+        result = asyncio.run(_run())
+        assert web_url in result
+
+    def test_crawl_web_search_disabled_by_default(self, tmp_path):
+        """Web search must not run unless explicitly enabled."""
+        crawler = Crawler()
+        urls_file = str(tmp_path / "urls.txt")
+
+        call_log: list[str] = []
+
+        async def _patched_search_with_dorks(**kwargs):
+            call_log.append("called")
+            return []
+
+        async def _run():
+            with patch.object(
+                crawler, "discover_urls", new=AsyncMock(return_value=[])
+            ), patch(
+                "ai_finder.web_search.WebSearcher.search_with_dorks",
+                new=AsyncMock(side_effect=_patched_search_with_dorks),
+            ):
+                return await crawler.crawl(
+                    urls_file=urls_file,
+                    use_github=False,
+                    use_gitlab=False,
+                    # use_web_search omitted → defaults to False
+                )
+
+        asyncio.run(_run())
+        assert call_log == [], "WebSearcher.search_with_dorks was called unexpectedly"
