@@ -145,20 +145,23 @@ class TestS3DorkGenerator:
         assert len(dorks) == len(S3_DORK_TERMS)
         for d in dorks:
             assert d.platform == "google"
-            assert "s3.amazonaws.com" in d.query
+            # Dork format: site:s3.amazonaws.com "<term>"
+            assert d.query.startswith("site:s3.amazonaws.com ")
 
     def test_s3_custom_domain_dorks(self):
         dorks = list(self.gen.s3_custom_domain_dorks())
         assert len(dorks) == len(S3_DORK_TERMS)
         for d in dorks:
-            assert "s3.amazonaws.com" in d.query
+            # Dork format: site:*.s3.amazonaws.com "<term>"
+            assert d.query.startswith("site:*.s3.amazonaws.com ")
 
     def test_s3_github_leak_dorks(self):
         dorks = list(self.gen.s3_github_leak_dorks())
         assert len(dorks) == len(S3_DORK_TERMS)
         for d in dorks:
-            assert "github.com" in d.query
-            assert "s3.amazonaws.com" in d.query
+            # Dork format: s3.amazonaws.com "<term>" site:github.com
+            assert d.query.startswith("s3.amazonaws.com ")
+            assert d.query.endswith("site:github.com")
 
     def test_all_dorks_unique(self):
         dorks = self.gen.all_dorks()
