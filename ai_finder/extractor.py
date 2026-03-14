@@ -78,7 +78,7 @@ class ExtractedFile:
 
 
 # ---------------------------------------------------------------------------
-# Helper: convert GitHub HTML URL → raw content URL
+# Helpers: convert platform HTML URLs → raw content URLs
 # ---------------------------------------------------------------------------
 
 
@@ -98,6 +98,65 @@ def github_html_to_raw(url: str) -> str:
             raw_path = "/".join(parts[:2] + parts[3:])
             return f"https://raw.githubusercontent.com/{raw_path}"
     return url  # already raw or not a GitHub blob URL
+
+
+def gitlab_html_to_raw(url: str) -> str:
+    """Convert a GitLab HTML blob URL to its raw content equivalent.
+
+    Works for gitlab.com, subdomains of gitlab.com, and self-hosted GitLab
+    instances that follow the standard ``/-/blob/`` URL pattern.
+
+    Examples
+    --------
+    https://gitlab.com/user/repo/-/blob/main/CLAUDE.md
+      → https://gitlab.com/user/repo/-/raw/main/CLAUDE.md
+    """
+    parsed = urlparse(url)
+    # The /-/blob/ pattern is unique to GitLab; matching it covers
+    # gitlab.com, *.gitlab.com, and any self-hosted instance.
+    if "/-/blob/" in parsed.path:
+        raw_path = parsed.path.replace("/-/blob/", "/-/raw/", 1)
+        return f"{parsed.scheme}://{parsed.netloc}{raw_path}"
+    return url
+
+
+def bitbucket_html_to_raw(url: str) -> str:
+    """Convert a Bitbucket HTML src URL to its raw content equivalent.
+
+    Examples
+    --------
+    https://bitbucket.org/user/repo/src/main/CLAUDE.md
+      → https://bitbucket.org/user/repo/raw/main/CLAUDE.md
+    """
+    parsed = urlparse(url)
+    if parsed.netloc == "bitbucket.org":
+        parts = parsed.path.lstrip("/").split("/")
+        # /user/repo/src/branch/path → /user/repo/raw/branch/path
+        if len(parts) >= 4 and parts[2] == "src":
+            parts[2] = "raw"
+            raw_path = "/".join(parts)
+            return f"https://bitbucket.org/{raw_path}"
+    return url
+
+
+def to_raw_url(url: str) -> str:
+    """Dispatch to the appropriate platform raw-URL converter.
+
+    Supports GitHub, GitLab and Bitbucket blob/src URLs; returns the
+    URL unchanged for any other host or already-raw address.
+
+    GitLab is identified by the ``/-/blob/`` path pattern, which is unique
+    to GitLab and works for gitlab.com, subdomains, and self-hosted instances.
+    """
+    parsed = urlparse(url)
+    netloc = parsed.netloc
+    if netloc == "github.com":
+        return github_html_to_raw(url)
+    if "/-/blob/" in parsed.path:
+        return gitlab_html_to_raw(url)
+    if netloc == "bitbucket.org":
+        return bitbucket_html_to_raw(url)
+    return url
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +202,7 @@ class FileExtractor:
 
     async def fetch(self, url: str) -> ExtractedFile:
         """Fetch *url* and return an :class:`ExtractedFile`."""
-        raw_url = github_html_to_raw(url)
+        raw_url = to_raw_url(url)
         try:
             assert self._session is not None, "Call inside async context manager"
             async with self._session.get(raw_url) as resp:
@@ -212,7 +271,60 @@ class FileExtractor:
         for item in data.get("items", []):
             html_url = item.get("html_url", "")
             if html_url:
-                urls.append(github_html_to_raw(html_url))
+                urls.append(to_raw_url(html_url))
+        return urls
+
+    async def search_gitlab(
+        self,
+        query: str,
+        per_page: int = 20,
+        page: int = 1,
+        gitlab_token: Optional[str] = None,
+    ) -> list[str]:
+        """Call the GitLab Code Search API and return raw-content URLs.
+
+        Uses the GitLab Projects search endpoint (blobs scope).
+        Requires a GitLab personal access token for best results.
+        Returns an empty list on error.
+
+        Reference: https://docs.gitlab.com/ee/api/search.html
+        """
+        params = {
+            "scope": "blobs",
+            "search": query,
+            "per_page": per_page,
+            "page": page,
+        }
+        api_url = "https://gitlab.com/api/v4/search"
+        extra_headers: dict[str, str] = {}
+        if gitlab_token:
+            extra_headers["PRIVATE-TOKEN"] = gitlab_token
+        try:
+            assert self._session is not None
+            async with self._session.get(
+                api_url,
+                params=params,
+                headers={**self._headers, **extra_headers},
+            ) as resp:
+                if resp.status in (401, 403, 422, 503):
+                    return []
+                resp.raise_for_status()
+                items = await resp.json()
+        except Exception:  # noqa: BLE001
+            return []
+
+        urls: list[str] = []
+        for item in items if isinstance(items, list) else []:
+            project_id = item.get("project_id")
+            path = item.get("path", "")
+            ref = item.get("ref", "HEAD")
+            if project_id and path:
+                raw = (
+                    f"https://gitlab.com/api/v4/projects/{project_id}"
+                    f"/repository/files/{path.replace('/', '%2F')}/raw"
+                    f"?ref={ref}"
+                )
+                urls.append(raw)
         return urls
 
     # ------------------------------------------------------------------
