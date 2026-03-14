@@ -19,6 +19,10 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 from bs4 import BeautifulSoup
 
+from ai_finder.logger import get_logger
+
+log = get_logger(__name__)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -203,12 +207,20 @@ class FileExtractor:
     async def fetch(self, url: str) -> ExtractedFile:
         """Fetch *url* and return an :class:`ExtractedFile`."""
         raw_url = to_raw_url(url)
+        log.debug("fetch  url=%s  raw_url=%s", url, raw_url)
         try:
             assert self._session is not None, "Call inside async context manager"
             async with self._session.get(raw_url) as resp:
                 resp.raise_for_status()
                 text = await resp.text(errors="replace")
+                log.debug(
+                    "fetch  OK  status=%d  bytes=%d  url=%s",
+                    resp.status,
+                    len(text),
+                    url,
+                )
         except Exception as exc:  # noqa: BLE001
+            log.warning("fetch  FAILED  url=%s  error=%s", url, exc)
             return ExtractedFile(
                 url=url,
                 raw_content="",
@@ -231,6 +243,7 @@ class FileExtractor:
         self, urls: list[str], concurrency: int = 10
     ) -> list[ExtractedFile]:
         """Fetch multiple URLs with bounded concurrency."""
+        log.info("fetch_many  total=%d  concurrency=%d", len(urls), concurrency)
         semaphore = asyncio.Semaphore(concurrency)
 
         async def _fetch_one(url: str) -> ExtractedFile:
@@ -253,6 +266,7 @@ class FileExtractor:
         """
         params = {"q": query, "per_page": per_page, "page": page}
         api_url = "https://api.github.com/search/code"
+        log.debug("github_search  query=%r  per_page=%d  page=%d", query, per_page, page)
         try:
             assert self._session is not None
             async with self._session.get(
@@ -260,11 +274,22 @@ class FileExtractor:
                 params=params,
                 headers={**self._headers, "Accept": "application/vnd.github+json"},
             ) as resp:
+                log.debug(
+                    "github_search  response  status=%d  query=%r",
+                    resp.status,
+                    query,
+                )
                 if resp.status in (403, 422, 503):
+                    log.warning(
+                        "github_search  skipped  status=%d  query=%r",
+                        resp.status,
+                        query,
+                    )
                     return []
                 resp.raise_for_status()
                 data = await resp.json()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("github_search  error  query=%r  error=%s", query, exc)
             return []
 
         urls: list[str] = []
@@ -272,6 +297,7 @@ class FileExtractor:
             html_url = item.get("html_url", "")
             if html_url:
                 urls.append(to_raw_url(html_url))
+        log.debug("github_search  found=%d  query=%r", len(urls), query)
         return urls
 
     async def search_gitlab(
@@ -299,6 +325,7 @@ class FileExtractor:
         extra_headers: dict[str, str] = {}
         if gitlab_token:
             extra_headers["PRIVATE-TOKEN"] = gitlab_token
+        log.debug("gitlab_search  query=%r  per_page=%d  page=%d", query, per_page, page)
         try:
             assert self._session is not None
             async with self._session.get(
@@ -306,11 +333,22 @@ class FileExtractor:
                 params=params,
                 headers={**self._headers, **extra_headers},
             ) as resp:
+                log.debug(
+                    "gitlab_search  response  status=%d  query=%r",
+                    resp.status,
+                    query,
+                )
                 if resp.status in (401, 403, 422, 503):
+                    log.warning(
+                        "gitlab_search  skipped  status=%d  query=%r",
+                        resp.status,
+                        query,
+                    )
                     return []
                 resp.raise_for_status()
                 items = await resp.json()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("gitlab_search  error  query=%r  error=%s", query, exc)
             return []
 
         urls: list[str] = []
@@ -325,6 +363,7 @@ class FileExtractor:
                     f"?ref={ref}"
                 )
                 urls.append(raw)
+        log.debug("gitlab_search  found=%d  query=%r", len(urls), query)
         return urls
 
     # ------------------------------------------------------------------

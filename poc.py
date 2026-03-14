@@ -47,11 +47,14 @@ from pathlib import Path
 
 from ai_finder.discovery import GoogleDorkGenerator, GitHubQueryGenerator, GitLabQueryGenerator, S3DorkGenerator
 from ai_finder.extractor import FileExtractor
+from ai_finder.logger import configure_logging, get_logger
 from ai_finder.processor import FileProcessor
 from ai_finder.scanner import SecretScanner
 from ai_finder.storage import Storage
 from ai_finder.vector_store import VectorStore
 from ai_finder.crawler import Crawler
+
+log = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Demo URLs — a small set of real, publicly visible AI config files on GitHub
@@ -417,11 +420,31 @@ def parse_args() -> argparse.Namespace:
             "Example: --semantic-search \"agents with bash execution permissions\""
         ),
     )
+    parser.add_argument(
+        "--log-level",
+        metavar="LEVEL",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help=(
+            "Logging verbosity for the ai_finder package "
+            "(default: INFO). Use DEBUG to see every HTTP call "
+            "and search query."
+        ),
+    )
+    parser.add_argument(
+        "--log-file",
+        metavar="FILE",
+        default=None,
+        help="Optional path to write log output to a file (in addition to stderr).",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    configure_logging(level=args.log_level, log_file=args.log_file)
+    log.debug("main  args=%s", args)
 
     if args.list_dorks:
         print_dorks(args)

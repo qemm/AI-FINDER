@@ -37,6 +37,9 @@ import aiohttp
 
 from ai_finder.discovery import GitHubQueryGenerator, GitLabQueryGenerator, TARGET_FILENAMES
 from ai_finder.extractor import DEFAULT_HEADERS, DEFAULT_TIMEOUT, FileExtractor
+from ai_finder.logger import get_logger
+
+log = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Crawler
@@ -134,6 +137,7 @@ class Crawler:
 
         Falls back to a GET request if HEAD is not allowed (405).
         """
+        log.debug("check_url  url=%s", url)
         try:
             async with session.head(
                 url, allow_redirects=True, raise_for_status=False
@@ -143,9 +147,24 @@ class Crawler:
                     async with session.get(
                         url, allow_redirects=True, raise_for_status=False
                     ) as gresp:
-                        return gresp.status < 400
-                return resp.status < 400
-        except Exception:  # noqa: BLE001
+                        reachable = gresp.status < 400
+                        log.debug(
+                            "check_url  GET fallback  status=%d  reachable=%s  url=%s",
+                            gresp.status,
+                            reachable,
+                            url,
+                        )
+                        return reachable
+                reachable = resp.status < 400
+                log.debug(
+                    "check_url  HEAD  status=%d  reachable=%s  url=%s",
+                    resp.status,
+                    reachable,
+                    url,
+                )
+                return reachable
+        except Exception as exc:  # noqa: BLE001
+            log.debug("check_url  error  url=%s  error=%s", url, exc)
             return False
 
     async def filter_reachable(self, urls: list[str]) -> list[str]:
@@ -153,6 +172,7 @@ class Crawler:
 
         Requests are made concurrently, bounded by *concurrency*.
         """
+        log.info("filter_reachable  checking %d URL(s)", len(urls))
         semaphore = asyncio.Semaphore(self._concurrency)
 
         async def _check(
@@ -169,7 +189,13 @@ class Crawler:
                 *(_check(session, u) for u in urls)
             )
 
-        return [url for url, ok in results if ok]
+        reachable = [url for url, ok in results if ok]
+        log.info(
+            "filter_reachable  done  reachable=%d  total=%d",
+            len(reachable),
+            len(urls),
+        )
+        return reachable
 
     async def enumerate_paths(
         self,
@@ -264,19 +290,33 @@ class Crawler:
         list[str]
             The newly discovered URLs that were appended to *urls_file*.
         """
+        log.info(
+            "crawl  start  urls_file=%s  target_url=%s  github=%s  gitlab=%s  max_queries=%s  check_reachability=%s",
+            urls_file,
+            target_url,
+            use_github,
+            use_gitlab,
+            max_queries,
+            check_reachability,
+        )
         existing = load_urls(urls_file)
+        log.info("crawl  existing_urls=%d  file=%s", len(existing), urls_file)
+
         candidates = await self.discover_urls(
             use_github=use_github,
             use_gitlab=use_gitlab,
             max_queries=max_queries,
             per_page=per_page,
         )
+        log.info("crawl  api_candidates=%d", len(candidates))
 
         # Path enumeration against the target domain (gobuster / wfuzz style)
         if target_url:
+            log.info("crawl  enumerate_paths  target=%s", target_url)
             path_candidates = await self.enumerate_paths(
                 target_url, check_reachability=False
             )
+            log.info("crawl  path_candidates=%d", len(path_candidates))
             candidates.extend(path_candidates)
 
         # Deduplicate candidates while preserving order
@@ -284,6 +324,11 @@ class Crawler:
 
         # Only process URLs that are not already recorded
         new_candidates = [u for u in candidates if u not in existing]
+        log.info(
+            "crawl  new_candidates=%d  (total_candidates=%d)",
+            len(new_candidates),
+            len(candidates),
+        )
 
         if check_reachability and new_candidates:
             new_urls = await self.filter_reachable(new_candidates)
@@ -292,6 +337,9 @@ class Crawler:
 
         if new_urls:
             update_urls_file(urls_file, existing, new_urls)
+            log.info("crawl  saved=%d  file=%s", len(new_urls), urls_file)
+        else:
+            log.info("crawl  no new URLs found")
 
         return new_urls
 
@@ -309,10 +357,14 @@ class Crawler:
         queries = gen.all_queries()
         if max_queries is not None:
             queries = queries[:max_queries]
+        log.info("_search_github  queries=%d  per_page=%d", len(queries), per_page)
         urls: list[str] = []
         for sq in queries:
+            log.debug("_search_github  query=%r", sq.query)
             found = await extractor.search_github(sq.query, per_page=per_page)
+            log.debug("_search_github  found=%d  query=%r", len(found), sq.query)
             urls.extend(found)
+        log.info("_search_github  total_urls=%d", len(urls))
         return urls
 
     async def _search_gitlab(
@@ -325,14 +377,18 @@ class Crawler:
         queries = gen.all_queries()
         if max_queries is not None:
             queries = queries[:max_queries]
+        log.info("_search_gitlab  queries=%d  per_page=%d", len(queries), per_page)
         urls: list[str] = []
         for sq in queries:
+            log.debug("_search_gitlab  query=%r", sq.query)
             found = await extractor.search_gitlab(
                 sq.query,
                 per_page=per_page,
                 gitlab_token=self._gitlab_token,
             )
+            log.debug("_search_gitlab  found=%d  query=%r", len(found), sq.query)
             urls.extend(found)
+        log.info("_search_gitlab  total_urls=%d", len(urls))
         return urls
 
 
