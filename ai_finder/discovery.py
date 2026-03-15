@@ -2,7 +2,8 @@
 discovery.py — Search-query / dork generation module.
 
 Produces:
-  - Google dork strings targeting AI agent config files.
+  - Google dork strings targeting AI agent config files (site:github.com).
+  - Generic web dork strings for discovering AI config files on any host.
   - GitHub Code Search API query strings.
   - GitLab Search API query strings.
   - S3 bucket discovery dorks.
@@ -11,7 +12,7 @@ Produces:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Iterator, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +83,15 @@ COMMON_DIRECTORIES: list[str] = [
     "api",
     "app",
 ]
+
+#: GitHub raw-content base URL used when constructing brute-force URLs.
+GITHUB_RAW_BASE: str = "https://raw.githubusercontent.com"
+
+#: GitLab base URL used when constructing brute-force raw-content URLs.
+GITLAB_RAW_BASE: str = "https://gitlab.com"
+
+#: Common branch names tried during brute-force URL generation.
+COMMON_BRANCHES: list[str] = ["main", "master", "develop", "dev"]
 
 #: S3-specific search terms for exposed AI configuration files.
 S3_DORK_TERMS: list[str] = [
@@ -177,6 +187,103 @@ class GoogleDorkGenerator:
 
     def all_dorks(self) -> list[SearchQuery]:
         """Return the full dork list, deduplicated."""
+        seen: set[str] = set()
+        result: list[SearchQuery] = []
+        for gen in (
+            self.filename_dorks,
+            self.content_dorks,
+            self.path_dorks,
+            self.combined_dorks,
+        ):
+            for dork in gen():
+                if dork.query not in seen:
+                    seen.add(dork.query)
+                    result.append(dork)
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Generic web dork generator (open-web — no site: restriction)
+# ---------------------------------------------------------------------------
+
+
+class WebDorkGenerator:
+    """Generates generic web dork strings for discovering AI agent config
+    files on **any** publicly indexed host — not limited to GitHub or GitLab.
+
+    Use these dorks together with any search engine (Google, Bing,
+    DuckDuckGo, Yandex, …) to find AI configuration files exposed on
+    personal sites, documentation portals, CDNs, S3-backed websites, and
+    other web-accessible locations.
+
+    The dorks intentionally omit a ``site:`` restriction so that every
+    search engine can surface results from its full index.
+
+    Examples
+    --------
+    >>> gen = WebDorkGenerator()
+    >>> gen.filename_dorks().__next__().query
+    'intitle:"CLAUDE.md"'
+    """
+
+    # Dork operator templates — no site: restriction
+    _FILENAME_TMPL = 'intitle:"{fname}"'
+    _CONTENT_TMPL = (
+        '"{signature}" '
+        "(filetype:md OR filetype:txt OR filetype:yaml OR filetype:json)"
+    )
+    _PATH_TMPL = 'inurl:"{path}" (filetype:md OR filetype:txt)'
+    _COMBINED_TMPL = 'intitle:"{fname}" "{signature}"'
+
+    def filename_dorks(self) -> Iterator[SearchQuery]:
+        """One dork per target filename, no host restriction."""
+        for fname in TARGET_FILENAMES:
+            yield SearchQuery(
+                platform="web",
+                query=self._FILENAME_TMPL.format(fname=fname),
+                description=f"Web dork for filename: {fname}",
+                tags=["filename", fname, "open-web"],
+            )
+
+    def content_dorks(self) -> Iterator[SearchQuery]:
+        """One dork per content signature, no host restriction."""
+        for sig in CONTENT_SIGNATURES:
+            yield SearchQuery(
+                platform="web",
+                query=self._CONTENT_TMPL.format(signature=sig),
+                description=f"Web dork for content signature: {sig!r}",
+                tags=["content-signature", "open-web"],
+            )
+
+    def path_dorks(self) -> Iterator[SearchQuery]:
+        """One dork per target path prefix, no host restriction."""
+        for path in TARGET_PATHS:
+            yield SearchQuery(
+                platform="web",
+                query=self._PATH_TMPL.format(path=path),
+                description=f"Web dork for path prefix: {path}",
+                tags=["path", "open-web"],
+            )
+
+    def combined_dorks(self) -> Iterator[SearchQuery]:
+        """Cross-product of key filenames × key signatures, no host restriction."""
+        priority_files = ["CLAUDE.md", "AGENTS.md", ".cursorrules"]
+        priority_sigs = [
+            "You are an expert developer",
+            "Rules for the agent",
+            "Assistant is a large language model trained by Anthropic",
+        ]
+        for fname in priority_files:
+            for sig in priority_sigs:
+                yield SearchQuery(
+                    platform="web",
+                    query=self._COMBINED_TMPL.format(fname=fname, signature=sig),
+                    description=f"Web combined dork: {fname} + signature",
+                    tags=["combined", fname, "open-web"],
+                )
+
+    def all_dorks(self) -> list[SearchQuery]:
+        """Return the full open-web dork list, deduplicated."""
         seen: set[str] = set()
         result: list[SearchQuery] = []
         for gen in (
@@ -394,3 +501,107 @@ class S3DorkGenerator:
                     seen.add(q.query)
                     result.append(q)
         return result
+
+
+# ---------------------------------------------------------------------------
+# Brute-force URL generators for GitHub and GitLab
+# ---------------------------------------------------------------------------
+
+
+def build_github_raw_urls(
+    owner: str,
+    repo: str,
+    branches: Optional[list[str]] = None,
+    paths: Optional[list[str]] = None,
+) -> list[str]:
+    """Generate brute-force raw-content URLs for a GitHub repository.
+
+    Constructs candidate URLs in the form::
+
+        https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}
+
+    where the last URL component is always a configuration file name drawn
+    from *paths* (defaulting to :data:`TARGET_FILENAMES`).  Multiple branch
+    names are tried so that repositories using non-default branch conventions
+    are also covered.
+
+    Parameters
+    ----------
+    owner:
+        GitHub account or organisation name.
+    repo:
+        Repository name.
+    branches:
+        Branch names to try.  Defaults to :data:`COMMON_BRANCHES`.
+    paths:
+        Relative path strings whose *last* component is a config filename
+        (e.g. ``"CLAUDE.md"`` or ``"agents/CLAUDE.md"``).  Defaults to
+        :data:`TARGET_FILENAMES`.
+
+    Returns
+    -------
+    list[str]
+        Deduplicated list of candidate raw-content URLs.
+    """
+    if branches is None:
+        branches = COMMON_BRANCHES
+    if paths is None:
+        paths = TARGET_FILENAMES
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for branch in branches:
+        for path in paths:
+            url = f"{GITHUB_RAW_BASE}/{owner}/{repo}/{branch}/{path}"
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls
+
+
+def build_gitlab_raw_urls(
+    namespace: str,
+    project: str,
+    branches: Optional[list[str]] = None,
+    paths: Optional[list[str]] = None,
+) -> list[str]:
+    """Generate brute-force raw-content URLs for a GitLab project.
+
+    Constructs candidate URLs in the form::
+
+        https://gitlab.com/{namespace}/{project}/-/raw/{branch}/{path}
+
+    where the last URL component is always a configuration file name drawn
+    from *paths* (defaulting to :data:`TARGET_FILENAMES`).
+
+    Parameters
+    ----------
+    namespace:
+        GitLab group or user namespace.
+    project:
+        Project (repository) name.
+    branches:
+        Branch names to try.  Defaults to :data:`COMMON_BRANCHES`.
+    paths:
+        Relative path strings whose *last* component is a config filename.
+        Defaults to :data:`TARGET_FILENAMES`.
+
+    Returns
+    -------
+    list[str]
+        Deduplicated list of candidate raw-content URLs.
+    """
+    if branches is None:
+        branches = COMMON_BRANCHES
+    if paths is None:
+        paths = TARGET_FILENAMES
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for branch in branches:
+        for path in paths:
+            url = f"{GITLAB_RAW_BASE}/{namespace}/{project}/-/raw/{branch}/{path}"
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls

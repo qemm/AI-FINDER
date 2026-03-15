@@ -24,6 +24,7 @@ Typical usage
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
@@ -31,7 +32,7 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 from bs4 import BeautifulSoup
 
-from ai_finder.discovery import GoogleDorkGenerator
+from ai_finder.discovery import GoogleDorkGenerator, WebDorkGenerator
 from ai_finder.extractor import DEFAULT_TIMEOUT
 from ai_finder.logger import get_logger
 
@@ -51,6 +52,7 @@ _EXCLUDED_DOMAINS: frozenset[str] = frozenset(
         "accounts.google.com",
         "support.google.com",
         "maps.google.com",
+        "bing.com",
         "duckduckgo.com",
         "yandex.com",
         "yandex.ru",
@@ -76,12 +78,64 @@ _SEARCH_HEADERS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# Dork-list builder
+# ---------------------------------------------------------------------------
+
+#: Valid values for the ``dork_sources`` parameter of
+#: :meth:`WebSearcher.search_with_dorks`.
+DORK_SOURCES = frozenset({"github", "web", "all"})
+
+
+def _build_dorks(
+    dork_sources: str,
+) -> list:
+    """Return the combined dork list for *dork_sources*.
+
+    Parameters
+    ----------
+    dork_sources:
+        One of ``"github"``, ``"web"``, or ``"all"``.
+
+    Returns
+    -------
+    list[:class:`~ai_finder.discovery.SearchQuery`]
+        Deduplicated list of dork queries for the requested sources.
+
+    Raises
+    ------
+    ValueError
+        If *dork_sources* is not a recognised value.
+    """
+    if dork_sources not in DORK_SOURCES:
+        raise ValueError(
+            f"Invalid dork_sources={dork_sources!r}. "
+            f"Must be one of: {sorted(DORK_SOURCES)}"
+        )
+
+    seen: set[str] = set()
+    result = []
+
+    def _add(queries):
+        for q in queries:
+            if q.query not in seen:
+                seen.add(q.query)
+                result.append(q)
+
+    if dork_sources in ("github", "all"):
+        _add(GoogleDorkGenerator().all_dorks())
+    if dork_sources in ("web", "all"):
+        _add(WebDorkGenerator().all_dorks())
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # WebSearcher
 # ---------------------------------------------------------------------------
 
 
 class WebSearcher:
-    """Search Google, DuckDuckGo, and Yandex using dork queries.
+    """Search Google, Bing, DuckDuckGo, and Yandex using dork queries.
 
     Results are parsed from the HTML search-result pages and returned as a
     list of external URLs.  The caller is responsible for verifying
@@ -97,6 +151,9 @@ class WebSearcher:
     headers:
         HTTP headers sent with every search-engine request.  Defaults to
         browser-like headers to reduce bot-detection friction.
+    request_delay:
+        Seconds to sleep between consecutive dork queries to avoid
+        triggering rate-limit responses from search engines.
     """
 
     def __init__(
@@ -104,11 +161,13 @@ class WebSearcher:
         session: Optional[aiohttp.ClientSession] = None,
         timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT,
         headers: Optional[dict[str, str]] = None,
+        request_delay: float = 2.0,
     ) -> None:
         self._session = session
         self._owns_session = session is None
         self._timeout = timeout
         self._headers = headers if headers is not None else _SEARCH_HEADERS
+        self._request_delay = request_delay
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -220,11 +279,42 @@ class WebSearcher:
         log.debug("yandex  found=%d  query=%r", len(urls), query)
         return urls[:max_results]
 
+    async def search_bing(
+        self, query: str, *, max_results: int = 10
+    ) -> list[str]:
+        """Search Bing and return result URLs.
+
+        Uses the standard Bing web search endpoint.  Bing's ``count``
+        parameter caps the number of results returned per page.
+
+        Parameters
+        ----------
+        query:
+            The search query / dork string.
+        max_results:
+            Maximum number of URLs to return.
+
+        Returns
+        -------
+        list[str]
+            External HTTP/HTTPS URLs extracted from the result page.
+        """
+        log.debug("bing  query=%r", query)
+        html = await self._fetch_page(
+            "https://www.bing.com/search",
+            params={"q": query, "count": max_results},
+        )
+        if not html:
+            return []
+        urls = self._extract_urls_from_html(html)
+        log.debug("bing  found=%d  query=%r", len(urls), query)
+        return urls[:max_results]
+
     async def search_all(
         self,
         query: str,
         *,
-        engines: tuple[str, ...] = ("duckduckgo", "google", "yandex"),
+        engines: tuple[str, ...] = ("duckduckgo", "google", "bing", "yandex"),
         max_results: int = 10,
     ) -> list[str]:
         """Search *query* across all *engines* and return deduplicated URLs.
@@ -235,7 +325,7 @@ class WebSearcher:
             The search query / dork string.
         engines:
             Names of search engines to query.  Each name must be one of
-            ``"duckduckgo"``, ``"google"``, or ``"yandex"``.
+            ``"duckduckgo"``, ``"google"``, ``"bing"``, or ``"yandex"``.
         max_results:
             Maximum number of URLs to return *per engine*.
 
@@ -247,6 +337,7 @@ class WebSearcher:
         _engine_map = {
             "duckduckgo": self.search_duckduckgo,
             "google": self.search_google,
+            "bing": self.search_bing,
             "yandex": self.search_yandex,
         }
         combined: list[str] = []
@@ -263,42 +354,63 @@ class WebSearcher:
     async def search_with_dorks(
         self,
         *,
-        engines: tuple[str, ...] = ("duckduckgo", "google", "yandex"),
+        engines: tuple[str, ...] = ("duckduckgo", "google", "bing", "yandex"),
         max_dorks: Optional[int] = None,
         max_results_per_query: int = 10,
+        dork_sources: str = "all",
     ) -> list[str]:
-        """Run all generated dork queries across *engines* and aggregate URLs.
+        """Run generated dork queries across *engines* and aggregate URLs.
 
-        Dork queries are produced by
-        :class:`~ai_finder.discovery.GoogleDorkGenerator`.  The resulting
-        URLs are deduplicated before being returned so that the caller can
-        pass them directly to :meth:`~ai_finder.crawler.Crawler.filter_reachable`.
+        Dork queries are selected by *dork_sources*:
+
+        * ``"github"`` — dorks restricted to ``site:github.com`` (produced by
+          :class:`~ai_finder.discovery.GoogleDorkGenerator`).  These find AI
+          config files specifically on GitHub.
+        * ``"web"`` — generic open-web dorks with **no** host restriction
+          (produced by :class:`~ai_finder.discovery.WebDorkGenerator`).
+          These find AI config files on *any* publicly indexed website,
+          including personal servers, CDNs, S3 sites, and documentation
+          portals.
+        * ``"all"`` *(default)* — both sets combined, providing the widest
+          possible coverage.
+
+        The resulting URLs are deduplicated before being returned so that
+        the caller can pass them directly to
+        :meth:`~ai_finder.crawler.Crawler.filter_reachable`.
 
         Parameters
         ----------
         engines:
-            Search engines to use.
+            Search engines to use.  Valid values: ``"duckduckgo"``,
+            ``"google"``, ``"bing"``, ``"yandex"``.
         max_dorks:
-            Maximum number of dork queries to submit per engine.  ``None``
+            Maximum number of dork queries to submit in total.  ``None``
             means no limit.
         max_results_per_query:
             Maximum URLs collected from each individual query/engine pair.
+        dork_sources:
+            Which dork generator(s) to use: ``"github"``, ``"web"``, or
+            ``"all"`` (default).
 
         Returns
         -------
         list[str]
             Deduplicated list of candidate URLs harvested from search results.
         """
-        gen = GoogleDorkGenerator()
-        dorks = gen.all_dorks()
+        dorks = _build_dorks(dork_sources)
         if max_dorks is not None:
             dorks = dorks[:max_dorks]
 
         log.info(
-            "search_with_dorks  dorks=%d  engines=%s", len(dorks), engines
+            "search_with_dorks  dorks=%d  engines=%s  sources=%s",
+            len(dorks),
+            engines,
+            dork_sources,
         )
         all_urls: list[str] = []
-        for dork in dorks:
+        for i, dork in enumerate(dorks):
+            if i > 0 and self._request_delay > 0:
+                await asyncio.sleep(self._request_delay)
             urls = await self.search_all(
                 dork.query,
                 engines=engines,
