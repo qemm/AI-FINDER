@@ -759,3 +759,232 @@ class TestCrawlerCrawlWebSearch:
 
         asyncio.run(_run())
         assert call_log == [], "WebSearcher.search_with_dorks was called unexpectedly"
+
+
+# ---------------------------------------------------------------------------
+# Rate-limiting: Crawler request_delay
+# ---------------------------------------------------------------------------
+
+
+class TestCrawlerRequestDelay:
+    def test_request_delay_parameter_is_stored(self):
+        crawler = Crawler(request_delay=2.5)
+        assert crawler._request_delay == 2.5
+
+    def test_default_request_delay_is_positive(self):
+        crawler = Crawler()
+        assert crawler._request_delay > 0
+
+    def test_sleep_called_between_github_queries(self):
+        """asyncio.sleep should be called between consecutive GitHub queries."""
+        crawler = Crawler(request_delay=1.0)
+
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        async def _run():
+            import asyncio as _asyncio
+            with patch(
+                "ai_finder.crawler.asyncio.sleep", new=fake_sleep
+            ), patch(
+                "ai_finder.extractor.FileExtractor.search_github",
+                new=AsyncMock(return_value=[]),
+            ):
+                async with __import__("ai_finder.extractor", fromlist=["FileExtractor"]).FileExtractor() as ext:
+                    await crawler._search_github(ext, max_queries=3, per_page=10)
+
+        asyncio.run(_run())
+        # 3 queries → 2 sleeps (before query 2 and 3)
+        assert len(sleep_calls) == 2
+        assert all(s == 1.0 for s in sleep_calls)
+
+    def test_no_sleep_before_first_github_query(self):
+        """No sleep should occur before the very first query."""
+        crawler = Crawler(request_delay=1.0)
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        async def _run():
+            with patch(
+                "ai_finder.crawler.asyncio.sleep", new=fake_sleep
+            ), patch(
+                "ai_finder.extractor.FileExtractor.search_github",
+                new=AsyncMock(return_value=[]),
+            ):
+                async with __import__("ai_finder.extractor", fromlist=["FileExtractor"]).FileExtractor() as ext:
+                    await crawler._search_github(ext, max_queries=1, per_page=10)
+
+        asyncio.run(_run())
+        assert sleep_calls == [], "Sleep should not be called before the first query"
+
+    def test_sleep_called_between_gitlab_queries(self):
+        """asyncio.sleep should be called between consecutive GitLab queries."""
+        crawler = Crawler(request_delay=0.5)
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        async def _run():
+            with patch(
+                "ai_finder.crawler.asyncio.sleep", new=fake_sleep
+            ), patch(
+                "ai_finder.extractor.FileExtractor.search_gitlab",
+                new=AsyncMock(return_value=[]),
+            ):
+                async with __import__("ai_finder.extractor", fromlist=["FileExtractor"]).FileExtractor() as ext:
+                    await crawler._search_gitlab(ext, max_queries=2, per_page=10)
+
+        asyncio.run(_run())
+        # 2 queries → 1 sleep
+        assert len(sleep_calls) == 1
+        assert sleep_calls[0] == 0.5
+
+    def test_zero_delay_skips_sleep(self):
+        """When request_delay=0, asyncio.sleep must not be called at all."""
+        crawler = Crawler(request_delay=0)
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        async def _run():
+            with patch(
+                "ai_finder.crawler.asyncio.sleep", new=fake_sleep
+            ), patch(
+                "ai_finder.extractor.FileExtractor.search_github",
+                new=AsyncMock(return_value=[]),
+            ):
+                async with __import__("ai_finder.extractor", fromlist=["FileExtractor"]).FileExtractor() as ext:
+                    await crawler._search_github(ext, max_queries=3, per_page=10)
+
+        asyncio.run(_run())
+        assert sleep_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Brute-force URL expansion helpers
+# ---------------------------------------------------------------------------
+
+
+class TestGithubRepoBaseFromUrl:
+    def test_extracts_base_from_valid_url(self):
+        from ai_finder.crawler import _github_repo_base_from_url
+
+        url = "https://raw.githubusercontent.com/owner/repo/main/CLAUDE.md"
+        assert _github_repo_base_from_url(url) == (
+            "https://raw.githubusercontent.com/owner/repo/main"
+        )
+
+    def test_returns_none_for_non_github_url(self):
+        from ai_finder.crawler import _github_repo_base_from_url
+
+        assert _github_repo_base_from_url("https://example.com/file.md") is None
+
+    def test_returns_none_for_short_path(self):
+        from ai_finder.crawler import _github_repo_base_from_url
+
+        assert (
+            _github_repo_base_from_url(
+                "https://raw.githubusercontent.com/owner/repo"
+            )
+            is None
+        )
+
+    def test_handles_nested_path(self):
+        from ai_finder.crawler import _github_repo_base_from_url
+
+        url = "https://raw.githubusercontent.com/org/repo/main/agents/CLAUDE.md"
+        assert _github_repo_base_from_url(url) == (
+            "https://raw.githubusercontent.com/org/repo/main"
+        )
+
+
+class TestGitlabRepoBaseFromUrl:
+    def test_extracts_base_from_valid_url(self):
+        from ai_finder.crawler import _gitlab_repo_base_from_url
+
+        url = "https://gitlab.com/group/project/-/raw/main/CLAUDE.md"
+        assert _gitlab_repo_base_from_url(url) == (
+            "https://gitlab.com/group/project/-/raw/main"
+        )
+
+    def test_returns_none_for_non_gitlab_raw_url(self):
+        from ai_finder.crawler import _gitlab_repo_base_from_url
+
+        assert _gitlab_repo_base_from_url("https://example.com/file.md") is None
+
+    def test_returns_none_for_blob_url(self):
+        """Blob URLs use /-/blob/ not /-/raw/ — must not match."""
+        from ai_finder.crawler import _gitlab_repo_base_from_url
+
+        url = "https://gitlab.com/group/project/-/blob/main/CLAUDE.md"
+        assert _gitlab_repo_base_from_url(url) is None
+
+
+class TestBruteForceFromGithubUrls:
+    def test_expands_discovered_url_to_all_filenames(self):
+        from ai_finder.crawler import _brute_force_from_github_urls
+        from ai_finder.discovery import TARGET_FILENAMES
+
+        urls = ["https://raw.githubusercontent.com/owner/repo/main/CLAUDE.md"]
+        result = _brute_force_from_github_urls(urls)
+        # Should contain all other target filenames for the same repo+branch
+        for fname in TARGET_FILENAMES:
+            candidate = f"https://raw.githubusercontent.com/owner/repo/main/{fname}"
+            if candidate not in urls:
+                assert candidate in result
+
+    def test_does_not_duplicate_already_discovered_urls(self):
+        from ai_finder.crawler import _brute_force_from_github_urls
+
+        urls = ["https://raw.githubusercontent.com/owner/repo/main/CLAUDE.md"]
+        result = _brute_force_from_github_urls(urls)
+        # The original URL must not be in the expansion
+        assert "https://raw.githubusercontent.com/owner/repo/main/CLAUDE.md" not in result
+
+    def test_handles_empty_input(self):
+        from ai_finder.crawler import _brute_force_from_github_urls
+
+        assert _brute_force_from_github_urls([]) == []
+
+    def test_handles_non_github_urls(self):
+        from ai_finder.crawler import _brute_force_from_github_urls
+
+        result = _brute_force_from_github_urls(["https://example.com/file.md"])
+        assert result == []
+
+
+class TestBruteForceFromGitlabUrls:
+    def test_expands_discovered_url_to_all_filenames(self):
+        from ai_finder.crawler import _brute_force_from_gitlab_urls
+        from ai_finder.discovery import TARGET_FILENAMES
+
+        urls = ["https://gitlab.com/group/project/-/raw/main/CLAUDE.md"]
+        result = _brute_force_from_gitlab_urls(urls)
+        for fname in TARGET_FILENAMES:
+            candidate = f"https://gitlab.com/group/project/-/raw/main/{fname}"
+            if candidate not in urls:
+                assert candidate in result
+
+    def test_does_not_duplicate_already_discovered_urls(self):
+        from ai_finder.crawler import _brute_force_from_gitlab_urls
+
+        urls = ["https://gitlab.com/group/project/-/raw/main/CLAUDE.md"]
+        result = _brute_force_from_gitlab_urls(urls)
+        assert "https://gitlab.com/group/project/-/raw/main/CLAUDE.md" not in result
+
+    def test_handles_empty_input(self):
+        from ai_finder.crawler import _brute_force_from_gitlab_urls
+
+        assert _brute_force_from_gitlab_urls([]) == []
+
+    def test_handles_non_gitlab_urls(self):
+        from ai_finder.crawler import _brute_force_from_gitlab_urls
+
+        result = _brute_force_from_gitlab_urls(["https://example.com/file.md"])
+        assert result == []

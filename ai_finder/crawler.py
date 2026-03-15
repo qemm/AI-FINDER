@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 
@@ -75,11 +75,13 @@ class Crawler:
         gitlab_token: Optional[str] = None,
         concurrency: int = 10,
         timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT,
+        request_delay: float = 1.0,
     ) -> None:
         self._github_token = github_token
         self._gitlab_token = gitlab_token
         self._concurrency = concurrency
         self._timeout = timeout
+        self._request_delay = request_delay
 
     # ------------------------------------------------------------------
     # Public API
@@ -363,7 +365,9 @@ class Crawler:
             # who never enable this feature, and prevents any circular-import risk.
             from ai_finder.web_search import WebSearcher  # noqa: PLC0415
 
-            async with WebSearcher(timeout=self._timeout) as searcher:
+            async with WebSearcher(
+                timeout=self._timeout, request_delay=self._request_delay
+            ) as searcher:
                 web_urls = await searcher.search_with_dorks(
                     engines=web_search_engines,
                     max_dorks=max_web_dorks,
@@ -411,11 +415,16 @@ class Crawler:
             queries = queries[:max_queries]
         log.info("_search_github  queries=%d  per_page=%d", len(queries), per_page)
         urls: list[str] = []
-        for sq in queries:
+        for i, sq in enumerate(queries):
+            if i > 0 and self._request_delay > 0:
+                await asyncio.sleep(self._request_delay)
             log.debug("_search_github  query=%r", sq.query)
             found = await extractor.search_github(sq.query, per_page=per_page)
             log.debug("_search_github  found=%d  query=%r", len(found), sq.query)
             urls.extend(found)
+            # Expand discovered repos into brute-force candidates so that
+            # every config filename is tried against each unique repository.
+            urls.extend(_brute_force_from_github_urls(found))
         log.info("_search_github  total_urls=%d", len(urls))
         return urls
 
@@ -431,7 +440,9 @@ class Crawler:
             queries = queries[:max_queries]
         log.info("_search_gitlab  queries=%d  per_page=%d", len(queries), per_page)
         urls: list[str] = []
-        for sq in queries:
+        for i, sq in enumerate(queries):
+            if i > 0 and self._request_delay > 0:
+                await asyncio.sleep(self._request_delay)
             log.debug("_search_gitlab  query=%r", sq.query)
             found = await extractor.search_gitlab(
                 sq.query,
@@ -440,6 +451,8 @@ class Crawler:
             )
             log.debug("_search_gitlab  found=%d  query=%r", len(found), sq.query)
             urls.extend(found)
+            # Expand discovered repos into brute-force candidates.
+            urls.extend(_brute_force_from_gitlab_urls(found))
         log.info("_search_gitlab  total_urls=%d", len(urls))
         return urls
 
@@ -519,3 +532,118 @@ def update_urls_file(path: str, existing: set[str], new_urls: list[str]) -> None
     """
     all_urls = sorted(existing | set(new_urls))
     Path(path).write_text("\n".join(all_urls) + "\n", encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Brute-force URL expansion helpers (module-level for easy unit-testing)
+# ---------------------------------------------------------------------------
+
+
+def _github_repo_base_from_url(url: str) -> Optional[str]:
+    """Extract the repository base URL from a ``raw.githubusercontent.com`` URL.
+
+    Returns ``None`` when *url* does not match the expected pattern.
+
+    Example
+    -------
+    ``https://raw.githubusercontent.com/owner/repo/main/CLAUDE.md``
+    → ``"https://raw.githubusercontent.com/owner/repo/main"``
+    """
+    parsed = urlparse(url)
+    if parsed.netloc != "raw.githubusercontent.com":
+        return None
+    parts = parsed.path.lstrip("/").split("/")
+    # Minimum: owner / repo / branch / filename
+    if len(parts) < 4:
+        return None
+    owner, repo, branch = parts[0], parts[1], parts[2]
+    return f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}"
+
+
+def _gitlab_repo_base_from_url(url: str) -> Optional[str]:
+    """Extract the repository base URL from a GitLab raw-content URL.
+
+    Returns ``None`` when *url* does not match the ``/-/raw/`` pattern.
+
+    Example
+    -------
+    ``https://gitlab.com/group/project/-/raw/main/CLAUDE.md``
+    → ``"https://gitlab.com/group/project/-/raw/main"``
+    """
+    parsed = urlparse(url)
+    if "/-/raw/" not in parsed.path:
+        return None
+    before, after = parsed.path.split("/-/raw/", 1)
+    branch = after.split("/")[0]
+    if not branch:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}{before}/-/raw/{branch}"
+
+
+def _brute_force_from_github_urls(urls: list[str]) -> list[str]:
+    """Expand a list of GitHub file URLs into brute-force candidate URLs.
+
+    For each unique repository base discovered in *urls*, all
+    :data:`~ai_finder.discovery.TARGET_FILENAMES` are appended to that base
+    so that the config file name is always the last URL component.
+
+    Parameters
+    ----------
+    urls:
+        Raw ``raw.githubusercontent.com`` URLs already discovered via the
+        GitHub Code Search API.
+
+    Returns
+    -------
+    list[str]
+        Deduplicated list of additional candidate raw-content URLs.
+    """
+    bases: set[str] = set()
+    for url in urls:
+        base = _github_repo_base_from_url(url)
+        if base:
+            bases.add(base)
+
+    result: list[str] = []
+    seen: set[str] = set(urls)
+    for base in sorted(bases):
+        for fname in TARGET_FILENAMES:
+            candidate = f"{base}/{fname}"
+            if candidate not in seen:
+                seen.add(candidate)
+                result.append(candidate)
+    return result
+
+
+def _brute_force_from_gitlab_urls(urls: list[str]) -> list[str]:
+    """Expand a list of GitLab file URLs into brute-force candidate URLs.
+
+    For each unique repository base discovered in *urls*, all
+    :data:`~ai_finder.discovery.TARGET_FILENAMES` are appended to that base
+    so that the config file name is always the last URL component.
+
+    Parameters
+    ----------
+    urls:
+        GitLab raw-content URLs already discovered via the GitLab Search API.
+
+    Returns
+    -------
+    list[str]
+        Deduplicated list of additional candidate raw-content URLs.
+    """
+    bases: set[str] = set()
+    for url in urls:
+        base = _gitlab_repo_base_from_url(url)
+        if base:
+            bases.add(base)
+
+    result: list[str] = []
+    seen: set[str] = set(urls)
+    for base in sorted(bases):
+        for fname in TARGET_FILENAMES:
+            candidate = f"{base}/{fname}"
+            if candidate not in seen:
+                seen.add(candidate)
+                result.append(candidate)
+    return result

@@ -11,7 +11,7 @@ Produces:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Iterator, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +82,15 @@ COMMON_DIRECTORIES: list[str] = [
     "api",
     "app",
 ]
+
+#: GitHub raw-content base URL used when constructing brute-force URLs.
+GITHUB_RAW_BASE: str = "https://raw.githubusercontent.com"
+
+#: GitLab base URL used when constructing brute-force raw-content URLs.
+GITLAB_RAW_BASE: str = "https://gitlab.com"
+
+#: Common branch names tried during brute-force URL generation.
+COMMON_BRANCHES: list[str] = ["main", "master", "develop", "dev"]
 
 #: S3-specific search terms for exposed AI configuration files.
 S3_DORK_TERMS: list[str] = [
@@ -394,3 +403,107 @@ class S3DorkGenerator:
                     seen.add(q.query)
                     result.append(q)
         return result
+
+
+# ---------------------------------------------------------------------------
+# Brute-force URL generators for GitHub and GitLab
+# ---------------------------------------------------------------------------
+
+
+def build_github_raw_urls(
+    owner: str,
+    repo: str,
+    branches: Optional[list[str]] = None,
+    paths: Optional[list[str]] = None,
+) -> list[str]:
+    """Generate brute-force raw-content URLs for a GitHub repository.
+
+    Constructs candidate URLs in the form::
+
+        https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}
+
+    where the last URL component is always a configuration file name drawn
+    from *paths* (defaulting to :data:`TARGET_FILENAMES`).  Multiple branch
+    names are tried so that repositories using non-default branch conventions
+    are also covered.
+
+    Parameters
+    ----------
+    owner:
+        GitHub account or organisation name.
+    repo:
+        Repository name.
+    branches:
+        Branch names to try.  Defaults to :data:`COMMON_BRANCHES`.
+    paths:
+        Relative path strings whose *last* component is a config filename
+        (e.g. ``"CLAUDE.md"`` or ``"agents/CLAUDE.md"``).  Defaults to
+        :data:`TARGET_FILENAMES`.
+
+    Returns
+    -------
+    list[str]
+        Deduplicated list of candidate raw-content URLs.
+    """
+    if branches is None:
+        branches = COMMON_BRANCHES
+    if paths is None:
+        paths = TARGET_FILENAMES
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for branch in branches:
+        for path in paths:
+            url = f"{GITHUB_RAW_BASE}/{owner}/{repo}/{branch}/{path}"
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls
+
+
+def build_gitlab_raw_urls(
+    namespace: str,
+    project: str,
+    branches: Optional[list[str]] = None,
+    paths: Optional[list[str]] = None,
+) -> list[str]:
+    """Generate brute-force raw-content URLs for a GitLab project.
+
+    Constructs candidate URLs in the form::
+
+        https://gitlab.com/{namespace}/{project}/-/raw/{branch}/{path}
+
+    where the last URL component is always a configuration file name drawn
+    from *paths* (defaulting to :data:`TARGET_FILENAMES`).
+
+    Parameters
+    ----------
+    namespace:
+        GitLab group or user namespace.
+    project:
+        Project (repository) name.
+    branches:
+        Branch names to try.  Defaults to :data:`COMMON_BRANCHES`.
+    paths:
+        Relative path strings whose *last* component is a config filename.
+        Defaults to :data:`TARGET_FILENAMES`.
+
+    Returns
+    -------
+    list[str]
+        Deduplicated list of candidate raw-content URLs.
+    """
+    if branches is None:
+        branches = COMMON_BRANCHES
+    if paths is None:
+        paths = TARGET_FILENAMES
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for branch in branches:
+        for path in paths:
+            url = f"{GITLAB_RAW_BASE}/{namespace}/{project}/-/raw/{branch}/{path}"
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls

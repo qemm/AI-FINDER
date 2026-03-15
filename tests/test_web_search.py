@@ -383,3 +383,89 @@ class TestWebSearcherContextManager:
                 assert s._session is mock_session
 
         asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# WebSearcher rate-limiting tests
+# ---------------------------------------------------------------------------
+
+
+class TestWebSearcherRequestDelay:
+    def test_request_delay_parameter_is_stored(self):
+        searcher = WebSearcher(request_delay=3.0)
+        assert searcher._request_delay == 3.0
+
+    def test_default_request_delay_is_positive(self):
+        searcher = WebSearcher()
+        assert searcher._request_delay > 0
+
+    def test_sleep_called_between_dork_queries(self):
+        """asyncio.sleep must be called once between each pair of queries."""
+        from unittest.mock import patch
+
+        searcher = WebSearcher(request_delay=2.0)
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        async def _run():
+            with patch("ai_finder.web_search.asyncio.sleep", new=fake_sleep), patch.object(
+                searcher, "search_all", new=AsyncMock(return_value=[])
+            ):
+                async with searcher:
+                    await searcher.search_with_dorks(
+                        engines=("duckduckgo",),
+                        max_dorks=3,
+                    )
+
+        asyncio.run(_run())
+        # 3 dorks → 2 sleeps (before dork 2 and dork 3)
+        assert len(sleep_calls) == 2
+        assert all(s == 2.0 for s in sleep_calls)
+
+    def test_no_sleep_before_first_dork_query(self):
+        """No sleep should occur before the very first dork query."""
+        from unittest.mock import patch
+
+        searcher = WebSearcher(request_delay=1.0)
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        async def _run():
+            with patch("ai_finder.web_search.asyncio.sleep", new=fake_sleep), patch.object(
+                searcher, "search_all", new=AsyncMock(return_value=[])
+            ):
+                async with searcher:
+                    await searcher.search_with_dorks(
+                        engines=("duckduckgo",),
+                        max_dorks=1,
+                    )
+
+        asyncio.run(_run())
+        assert sleep_calls == []
+
+    def test_zero_delay_skips_sleep(self):
+        """request_delay=0 must not call asyncio.sleep."""
+        from unittest.mock import patch
+
+        searcher = WebSearcher(request_delay=0)
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        async def _run():
+            with patch("ai_finder.web_search.asyncio.sleep", new=fake_sleep), patch.object(
+                searcher, "search_all", new=AsyncMock(return_value=[])
+            ):
+                async with searcher:
+                    await searcher.search_with_dorks(
+                        engines=("duckduckgo",),
+                        max_dorks=3,
+                    )
+
+        asyncio.run(_run())
+        assert sleep_calls == []

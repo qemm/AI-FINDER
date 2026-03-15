@@ -11,6 +11,11 @@ from ai_finder.discovery import (
     TARGET_FILENAMES,
     CONTENT_SIGNATURES,
     S3_DORK_TERMS,
+    GITHUB_RAW_BASE,
+    GITLAB_RAW_BASE,
+    COMMON_BRANCHES,
+    build_github_raw_urls,
+    build_gitlab_raw_urls,
 )
 
 
@@ -176,3 +181,129 @@ class TestS3DorkGenerator:
         dork_text = " ".join(d.query for d in dorks)
         for term in S3_DORK_TERMS:
             assert term in dork_text, f"S3 term {term!r} not found in any dork"
+
+
+# ---------------------------------------------------------------------------
+# Constants: GITHUB_RAW_BASE, GITLAB_RAW_BASE, COMMON_BRANCHES
+# ---------------------------------------------------------------------------
+
+
+class TestBruteForceConstants:
+    def test_github_raw_base_is_string(self):
+        assert isinstance(GITHUB_RAW_BASE, str)
+        assert GITHUB_RAW_BASE.startswith("https://")
+
+    def test_gitlab_raw_base_is_string(self):
+        assert isinstance(GITLAB_RAW_BASE, str)
+        assert GITLAB_RAW_BASE.startswith("https://")
+
+    def test_common_branches_non_empty(self):
+        assert len(COMMON_BRANCHES) > 0
+
+    def test_common_branches_includes_main_and_master(self):
+        assert "main" in COMMON_BRANCHES
+        assert "master" in COMMON_BRANCHES
+
+
+# ---------------------------------------------------------------------------
+# build_github_raw_urls
+# ---------------------------------------------------------------------------
+
+
+class TestBuildGithubRawUrls:
+    def test_returns_urls_for_all_branches_and_filenames(self):
+        urls = build_github_raw_urls("owner", "repo")
+        # Should have one URL per branch per filename
+        assert len(urls) == len(COMMON_BRANCHES) * len(TARGET_FILENAMES)
+
+    def test_urls_use_correct_base(self):
+        urls = build_github_raw_urls("owner", "repo")
+        for url in urls:
+            assert url.startswith(GITHUB_RAW_BASE)
+
+    def test_url_format_is_correct(self):
+        urls = build_github_raw_urls("myorg", "myrepo", branches=["main"])
+        for url in urls:
+            assert url.startswith("https://raw.githubusercontent.com/myorg/myrepo/main/")
+
+    def test_config_filename_is_last_component(self):
+        urls = build_github_raw_urls("owner", "repo", branches=["main"])
+        for url in urls:
+            last = url.rsplit("/", 1)[-1]
+            # The last component must be one of the target filenames (basename)
+            assert any(url.endswith(f) for f in TARGET_FILENAMES)
+
+    def test_custom_branches_are_used(self):
+        urls = build_github_raw_urls("owner", "repo", branches=["custom-branch"])
+        assert all("/custom-branch/" in url for url in urls)
+
+    def test_custom_paths_override_defaults(self):
+        urls = build_github_raw_urls("owner", "repo", branches=["main"], paths=["CLAUDE.md"])
+        assert len(urls) == 1
+        assert urls[0] == "https://raw.githubusercontent.com/owner/repo/main/CLAUDE.md"
+
+    def test_results_are_deduplicated(self):
+        urls = build_github_raw_urls("owner", "repo")
+        assert len(urls) == len(set(urls))
+
+    def test_all_target_filenames_are_covered(self):
+        urls = build_github_raw_urls("owner", "repo", branches=["main"])
+        for fname in TARGET_FILENAMES:
+            assert any(url.endswith(fname) for url in urls)
+
+    def test_urls_include_subdirectory_paths_when_provided(self):
+        urls = build_github_raw_urls(
+            "owner", "repo",
+            branches=["main"],
+            paths=["agents/CLAUDE.md", "CLAUDE.md"],
+        )
+        assert "https://raw.githubusercontent.com/owner/repo/main/agents/CLAUDE.md" in urls
+        assert "https://raw.githubusercontent.com/owner/repo/main/CLAUDE.md" in urls
+
+
+# ---------------------------------------------------------------------------
+# build_gitlab_raw_urls
+# ---------------------------------------------------------------------------
+
+
+class TestBuildGitlabRawUrls:
+    def test_returns_urls_for_all_branches_and_filenames(self):
+        urls = build_gitlab_raw_urls("group", "project")
+        assert len(urls) == len(COMMON_BRANCHES) * len(TARGET_FILENAMES)
+
+    def test_urls_use_correct_base(self):
+        urls = build_gitlab_raw_urls("group", "project")
+        for url in urls:
+            assert url.startswith(GITLAB_RAW_BASE)
+
+    def test_url_format_is_correct(self):
+        urls = build_gitlab_raw_urls("mygroup", "myproject", branches=["main"])
+        for url in urls:
+            assert url.startswith(
+                "https://gitlab.com/mygroup/myproject/-/raw/main/"
+            )
+
+    def test_config_filename_is_last_component(self):
+        urls = build_gitlab_raw_urls("group", "project", branches=["main"])
+        for url in urls:
+            assert any(url.endswith(f) for f in TARGET_FILENAMES)
+
+    def test_custom_branches_are_used(self):
+        urls = build_gitlab_raw_urls("group", "project", branches=["feature"])
+        assert all("/-/raw/feature/" in url for url in urls)
+
+    def test_custom_paths_override_defaults(self):
+        urls = build_gitlab_raw_urls(
+            "group", "project", branches=["main"], paths=["AGENTS.md"]
+        )
+        assert len(urls) == 1
+        assert urls[0] == "https://gitlab.com/group/project/-/raw/main/AGENTS.md"
+
+    def test_results_are_deduplicated(self):
+        urls = build_gitlab_raw_urls("group", "project")
+        assert len(urls) == len(set(urls))
+
+    def test_all_target_filenames_are_covered(self):
+        urls = build_gitlab_raw_urls("group", "project", branches=["main"])
+        for fname in TARGET_FILENAMES:
+            assert any(url.endswith(fname) for url in urls)

@@ -24,6 +24,7 @@ Typical usage
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
@@ -104,11 +105,13 @@ class WebSearcher:
         session: Optional[aiohttp.ClientSession] = None,
         timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT,
         headers: Optional[dict[str, str]] = None,
+        request_delay: float = 2.0,
     ) -> None:
         self._session = session
         self._owns_session = session is None
         self._timeout = timeout
         self._headers = headers if headers is not None else _SEARCH_HEADERS
+        self._request_delay = request_delay
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -298,7 +301,9 @@ class WebSearcher:
             "search_with_dorks  dorks=%d  engines=%s", len(dorks), engines
         )
         all_urls: list[str] = []
-        for dork in dorks:
+        for i, dork in enumerate(dorks):
+            if i > 0 and self._request_delay > 0:
+                await asyncio.sleep(self._request_delay)
             urls = await self.search_all(
                 dork.query,
                 engines=engines,
