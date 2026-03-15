@@ -69,6 +69,20 @@ TARGET_PATHS: list[str] = [
     "docs/",
 ]
 
+#: Common web directory names used when probing target domains for AI config
+#: files at multiple directory depths (see :func:`ai_finder.crawler.build_directory_paths`).
+COMMON_DIRECTORIES: list[str] = [
+    "agents",
+    "config",
+    "prompts",
+    ".cursor",
+    "docs",
+    "src",
+    "ai",
+    "api",
+    "app",
+]
+
 #: S3-specific search terms for exposed AI configuration files.
 S3_DORK_TERMS: list[str] = [
     "CLAUDE.md",

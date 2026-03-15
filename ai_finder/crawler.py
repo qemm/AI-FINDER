@@ -35,7 +35,12 @@ from urllib.parse import urljoin
 
 import aiohttp
 
-from ai_finder.discovery import GitHubQueryGenerator, GitLabQueryGenerator, TARGET_FILENAMES
+from ai_finder.discovery import (
+    GitHubQueryGenerator,
+    GitLabQueryGenerator,
+    TARGET_FILENAMES,
+    COMMON_DIRECTORIES,
+)
 from ai_finder.extractor import DEFAULT_HEADERS, DEFAULT_TIMEOUT, FileExtractor
 from ai_finder.logger import get_logger
 
@@ -133,9 +138,11 @@ class Crawler:
         return deduped
 
     async def check_url(self, session: aiohttp.ClientSession, url: str) -> bool:
-        """Return ``True`` if *url* responds with an HTTP status < 400.
+        """Return ``True`` if *url* responds with HTTP status 200.
 
-        Falls back to a GET request if HEAD is not allowed (405).
+        Only HTTP 200 is accepted; 401, 403, and other non-200 responses are
+        treated as unreachable.  Falls back to a GET request if HEAD is not
+        allowed (405).
         """
         log.debug("check_url  url=%s", url)
         try:
@@ -147,7 +154,7 @@ class Crawler:
                     async with session.get(
                         url, allow_redirects=True, raise_for_status=False
                     ) as gresp:
-                        reachable = gresp.status < 400
+                        reachable = gresp.status == 200
                         log.debug(
                             "check_url  GET fallback  status=%d  reachable=%s  url=%s",
                             gresp.status,
@@ -155,7 +162,7 @@ class Crawler:
                             url,
                         )
                         return reachable
-                reachable = resp.status < 400
+                reachable = resp.status == 200
                 log.debug(
                     "check_url  HEAD  status=%d  reachable=%s  url=%s",
                     resp.status,
@@ -202,14 +209,23 @@ class Crawler:
         target_url: str,
         *,
         paths: Optional[list[str]] = None,
+        depth: int = 4,
         check_reachability: bool = True,
     ) -> list[str]:
         """Enumerate AI config file paths from *target_url* (gobuster / wfuzz style).
 
         Constructs candidate URLs by joining *target_url* with each path in
-        *paths* (defaulting to :data:`ai_finder.discovery.TARGET_FILENAMES`)
-        and — when *check_reachability* is ``True`` — filters them to only
-        those that return a successful HTTP response.
+        *paths*.  When *paths* is ``None`` (the default), the method generates
+        paths at every directory depth from 0 (root) to *depth* using
+        :data:`ai_finder.discovery.COMMON_DIRECTORIES` and
+        :data:`ai_finder.discovery.TARGET_FILENAMES`, producing URLs such as::
+
+            https://example.com/CLAUDE.md                  # depth 0
+            https://example.com/agents/CLAUDE.md           # depth 1
+            https://example.com/agents/config/CLAUDE.md    # depth 2
+
+        When *check_reachability* is ``True`` the candidate list is further
+        filtered to URLs that return HTTP 200.
 
         Parameters
         ----------
@@ -217,7 +233,10 @@ class Crawler:
             The base URL to start from (e.g. ``https://example.com``).
         paths:
             Explicit list of paths to probe.  When ``None`` (default),
-            :data:`ai_finder.discovery.TARGET_FILENAMES` is used.
+            paths are generated automatically up to *depth* directory levels.
+        depth:
+            Maximum number of directory components to prepend to each
+            filename.  Ignored when *paths* is supplied explicitly.
         check_reachability:
             When ``True`` (the default) each candidate URL is verified via
             an HTTP request before being returned.
@@ -229,7 +248,7 @@ class Crawler:
             *target_url*.
         """
         if paths is None:
-            paths = list(TARGET_FILENAMES)
+            paths = build_directory_paths(depth)
 
         base = target_url.rstrip("/") + "/"
         candidates = [urljoin(base, p.lstrip("/")) for p in paths]
@@ -245,8 +264,12 @@ class Crawler:
         target_url: Optional[str] = None,
         use_github: bool = True,
         use_gitlab: bool = True,
+        use_web_search: bool = False,
+        web_search_engines: tuple[str, ...] = ("duckduckgo", "google", "yandex"),
+        max_web_dorks: Optional[int] = None,
         max_queries: Optional[int] = None,
         per_page: int = 30,
+        depth: int = 4,
         check_reachability: bool = True,
     ) -> list[str]:
         """Run the full crawl pipeline and update *urls_file*.
@@ -256,10 +279,13 @@ class Crawler:
         1. Load any URLs already present in *urls_file*.
         2. Discover new candidate URLs via the GitHub / GitLab search APIs.
         3. If *target_url* is provided, enumerate known AI config file paths
-           directly against that domain (gobuster / wfuzz style).
-        4. Exclude candidates that already appear in *urls_file*.
-        5. Optionally filter candidates to reachable URLs only.
-        6. Merge verified URLs with the existing set and rewrite *urls_file*.
+           directly against that domain (gobuster / wfuzz style) at up to
+           *depth* directory levels deep.
+        4. If *use_web_search* is ``True``, submit dork queries to the search
+           engines listed in *web_search_engines* and collect result URLs.
+        5. Exclude candidates that already appear in *urls_file*.
+        6. Optionally filter candidates to HTTP-200 URLs only.
+        7. Merge verified URLs with the existing set and rewrite *urls_file*.
 
         Parameters
         ----------
@@ -269,21 +295,29 @@ class Crawler:
         target_url:
             Optional base URL of a domain to enumerate AI config file paths
             against (e.g. ``https://example.com``).  When provided, the
-            crawler probes every path in
-            :data:`ai_finder.discovery.TARGET_FILENAMES` directly — similar
-            to how gobuster or wfuzz discover URL paths — in addition to any
-            API-based search results.
+            crawler probes paths up to *depth* directory levels deep.
         use_github:
             Enable GitHub Code Search.
         use_gitlab:
             Enable GitLab blob search.
+        use_web_search:
+            When ``True``, submit dork queries to *web_search_engines* and
+            collect URLs from the search result pages.
+        web_search_engines:
+            Tuple of engine names to use when *use_web_search* is ``True``.
+            Valid values: ``"duckduckgo"``, ``"google"``, ``"yandex"``.
+        max_web_dorks:
+            Cap the number of dork queries sent to each search engine.
+            ``None`` means no cap.
         max_queries:
-            Cap the number of queries sent per platform.
+            Cap the number of queries sent per API platform.
         per_page:
             Results per API page call.
+        depth:
+            Maximum directory depth for target-URL path enumeration.
         check_reachability:
             When ``True`` (the default) each new URL is verified via an HTTP
-            HEAD request before being written to *urls_file*.
+            request (HTTP 200 only) before being written to *urls_file*.
 
         Returns
         -------
@@ -291,12 +325,15 @@ class Crawler:
             The newly discovered URLs that were appended to *urls_file*.
         """
         log.info(
-            "crawl  start  urls_file=%s  target_url=%s  github=%s  gitlab=%s  max_queries=%s  check_reachability=%s",
+            "crawl  start  urls_file=%s  target_url=%s  github=%s  gitlab=%s"
+            "  web_search=%s  max_queries=%s  depth=%d  check_reachability=%s",
             urls_file,
             target_url,
             use_github,
             use_gitlab,
+            use_web_search,
             max_queries,
+            depth,
             check_reachability,
         )
         existing = load_urls(urls_file)
@@ -312,12 +349,27 @@ class Crawler:
 
         # Path enumeration against the target domain (gobuster / wfuzz style)
         if target_url:
-            log.info("crawl  enumerate_paths  target=%s", target_url)
+            log.info("crawl  enumerate_paths  target=%s  depth=%d", target_url, depth)
             path_candidates = await self.enumerate_paths(
-                target_url, check_reachability=False
+                target_url, check_reachability=False, depth=depth
             )
             log.info("crawl  path_candidates=%d", len(path_candidates))
             candidates.extend(path_candidates)
+
+        # Web search dorking (Google, DuckDuckGo, Yandex)
+        if use_web_search:
+            log.info("crawl  web_search  engines=%s", web_search_engines)
+            # Deferred import avoids a hard dependency on web_search for users
+            # who never enable this feature, and prevents any circular-import risk.
+            from ai_finder.web_search import WebSearcher  # noqa: PLC0415
+
+            async with WebSearcher(timeout=self._timeout) as searcher:
+                web_urls = await searcher.search_with_dorks(
+                    engines=web_search_engines,
+                    max_dorks=max_web_dorks,
+                )
+            log.info("crawl  web_search_candidates=%d", len(web_urls))
+            candidates.extend(web_urls)
 
         # Deduplicate candidates while preserving order
         candidates = list(dict.fromkeys(candidates))
@@ -390,6 +442,52 @@ class Crawler:
             urls.extend(found)
         log.info("_search_gitlab  total_urls=%d", len(urls))
         return urls
+
+
+# ---------------------------------------------------------------------------
+# Path-generation helpers (module-level for easy unit-testing)
+# ---------------------------------------------------------------------------
+
+
+def build_directory_paths(max_depth: int = 4) -> list[str]:
+    """Generate candidate relative file paths at directory depths 0 to *max_depth*.
+
+    At depth 0 the raw :data:`~ai_finder.discovery.TARGET_FILENAMES` are
+    returned (files probed directly at the site root).  At each subsequent
+    depth level, every unique *permutation* of
+    :data:`~ai_finder.discovery.COMMON_DIRECTORIES` of that length is
+    prepended to each filename, producing paths such as::
+
+        CLAUDE.md                        # depth 0
+        agents/CLAUDE.md                 # depth 1
+        agents/config/CLAUDE.md          # depth 2
+        agents/config/prompts/CLAUDE.md  # depth 3
+
+    Using permutations (rather than the full Cartesian product) prevents
+    semantically odd paths such as ``agents/agents/CLAUDE.md``.
+
+    Parameters
+    ----------
+    max_depth:
+        Maximum number of directory components to prepend (1-based).
+        Depth 0 (root-level filenames) is always included.
+
+    Returns
+    -------
+    list[str]
+        Deduplicated, insertion-ordered list of relative path strings.
+    """
+    from itertools import permutations as _permutations  # local import is fine
+
+    paths: list[str] = list(TARGET_FILENAMES)  # depth 0
+
+    for depth in range(1, max_depth + 1):
+        for dir_combo in _permutations(COMMON_DIRECTORIES, depth):
+            prefix = "/".join(dir_combo)
+            for fname in TARGET_FILENAMES:
+                paths.append(f"{prefix}/{fname}")
+
+    return list(dict.fromkeys(paths))  # deduplicate while preserving order
 
 
 # ---------------------------------------------------------------------------
