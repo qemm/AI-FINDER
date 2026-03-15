@@ -469,3 +469,234 @@ class TestWebSearcherRequestDelay:
 
         asyncio.run(_run())
         assert sleep_calls == []
+
+
+# ---------------------------------------------------------------------------
+# WebSearcher.search_bing tests
+# ---------------------------------------------------------------------------
+
+
+class TestWebSearcherBing:
+    SAMPLE_HTML = (
+        '<a href="https://example.com/CLAUDE.md">link</a>'
+        '<a href="https://example.org/AGENTS.md">link2</a>'
+    )
+
+    def test_search_bing_returns_urls(self):
+        searcher = WebSearcher()
+
+        async def _run():
+            with patch.object(
+                searcher,
+                "_fetch_page",
+                new=AsyncMock(return_value=self.SAMPLE_HTML),
+            ):
+                return await searcher.search_bing("CLAUDE.md")
+
+        result = asyncio.run(_run())
+        assert len(result) > 0
+        assert any("CLAUDE.md" in u for u in result)
+
+    def test_search_bing_respects_max_results(self):
+        searcher = WebSearcher()
+        many_links = "".join(
+            f'<a href="https://site{i}.example.com/CLAUDE.md">l</a>'
+            for i in range(20)
+        )
+
+        async def _run():
+            with patch.object(
+                searcher,
+                "_fetch_page",
+                new=AsyncMock(return_value=many_links),
+            ):
+                return await searcher.search_bing("test", max_results=5)
+
+        result = asyncio.run(_run())
+        assert len(result) <= 5
+
+    def test_search_bing_returns_empty_on_fetch_failure(self):
+        searcher = WebSearcher()
+
+        async def _run():
+            with patch.object(
+                searcher,
+                "_fetch_page",
+                new=AsyncMock(return_value=""),
+            ):
+                return await searcher.search_bing("test query")
+
+        result = asyncio.run(_run())
+        assert result == []
+
+    def test_search_bing_excluded_from_results(self):
+        """bing.com URLs must never appear in the returned list."""
+        html = (
+            '<a href="https://www.bing.com/search?q=test">bing result</a>'
+            '<a href="https://example.com/CLAUDE.md">real result</a>'
+        )
+        result = WebSearcher._extract_urls_from_html(html)
+        assert all("bing.com" not in u for u in result)
+        assert "https://example.com/CLAUDE.md" in result
+
+
+# ---------------------------------------------------------------------------
+# _build_dorks helper tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDorks:
+    def test_github_source_returns_github_dorks(self):
+        from ai_finder.web_search import _build_dorks
+
+        dorks = _build_dorks("github")
+        assert len(dorks) > 0
+        assert all(d.platform == "google" for d in dorks)
+
+    def test_web_source_returns_web_dorks(self):
+        from ai_finder.web_search import _build_dorks
+
+        dorks = _build_dorks("web")
+        assert len(dorks) > 0
+        assert all(d.platform == "web" for d in dorks)
+
+    def test_all_source_returns_both(self):
+        from ai_finder.web_search import _build_dorks
+        from ai_finder.discovery import GoogleDorkGenerator, WebDorkGenerator
+
+        dorks = _build_dorks("all")
+        github_count = len(GoogleDorkGenerator().all_dorks())
+        web_count = len(WebDorkGenerator().all_dorks())
+        # Total should be github + web (deduplicated, but no overlap expected)
+        assert len(dorks) == github_count + web_count
+
+    def test_all_source_is_deduplicated(self):
+        from ai_finder.web_search import _build_dorks
+
+        dorks = _build_dorks("all")
+        queries = [d.query for d in dorks]
+        assert len(queries) == len(set(queries))
+
+    def test_invalid_source_raises_value_error(self):
+        from ai_finder.web_search import _build_dorks
+
+        with pytest.raises(ValueError, match="Invalid dork_sources"):
+            _build_dorks("invalid_source")
+
+    def test_github_and_web_queries_are_disjoint(self):
+        """GitHub-targeted and open-web dork sets must not overlap."""
+        from ai_finder.web_search import _build_dorks
+
+        github_queries = {d.query for d in _build_dorks("github")}
+        web_queries = {d.query for d in _build_dorks("web")}
+        assert github_queries.isdisjoint(web_queries)
+
+
+# ---------------------------------------------------------------------------
+# search_with_dorks dork_sources tests
+# ---------------------------------------------------------------------------
+
+
+class TestSearchWithDorksSources:
+    def test_dork_sources_github_uses_github_dorks(self):
+        from ai_finder.discovery import GoogleDorkGenerator
+        from ai_finder.web_search import _build_dorks
+
+        expected = len(GoogleDorkGenerator().all_dorks())
+        assert len(_build_dorks("github")) == expected
+
+    def test_dork_sources_web_uses_web_dorks(self):
+        from ai_finder.discovery import WebDorkGenerator
+        from ai_finder.web_search import _build_dorks
+
+        expected = len(WebDorkGenerator().all_dorks())
+        assert len(_build_dorks("web")) == expected
+
+    def test_search_with_dorks_passes_through_web_dork_sources(self):
+        """search_with_dorks must use web dorks when dork_sources='web'."""
+        from ai_finder.discovery import WebDorkGenerator
+
+        searcher = WebSearcher()
+        call_args: list[str] = []
+
+        async def _patched_search_all(query, *, engines, max_results):
+            call_args.append(query)
+            return []
+
+        async def _run():
+            with patch.object(
+                searcher,
+                "search_all",
+                new=AsyncMock(side_effect=_patched_search_all),
+            ):
+                async with searcher:
+                    await searcher.search_with_dorks(
+                        engines=("duckduckgo",),
+                        max_dorks=None,
+                        dork_sources="web",
+                    )
+
+        asyncio.run(_run())
+        expected_web_queries = {d.query for d in WebDorkGenerator().all_dorks()}
+        actual_queries = set(call_args)
+        assert actual_queries == expected_web_queries
+
+    def test_search_with_dorks_all_covers_both_generators(self):
+        from ai_finder.discovery import GoogleDorkGenerator, WebDorkGenerator
+
+        searcher = WebSearcher()
+        call_args: list[str] = []
+
+        async def _patched_search_all(query, *, engines, max_results):
+            call_args.append(query)
+            return []
+
+        async def _run():
+            with patch.object(
+                searcher,
+                "search_all",
+                new=AsyncMock(side_effect=_patched_search_all),
+            ):
+                async with searcher:
+                    await searcher.search_with_dorks(
+                        engines=("duckduckgo",),
+                        dork_sources="all",
+                    )
+
+        asyncio.run(_run())
+        github_queries = {d.query for d in GoogleDorkGenerator().all_dorks()}
+        web_queries = {d.query for d in WebDorkGenerator().all_dorks()}
+        all_expected = github_queries | web_queries
+        assert set(call_args) == all_expected
+
+    def test_search_all_includes_bing_engine(self):
+        searcher = WebSearcher()
+
+        async def _run():
+            with patch.object(
+                searcher,
+                "search_duckduckgo",
+                new=AsyncMock(return_value=["https://a.com/CLAUDE.md"]),
+            ), patch.object(
+                searcher,
+                "search_google",
+                new=AsyncMock(return_value=["https://b.com/CLAUDE.md"]),
+            ), patch.object(
+                searcher,
+                "search_bing",
+                new=AsyncMock(return_value=["https://c.com/CLAUDE.md"]),
+            ), patch.object(
+                searcher,
+                "search_yandex",
+                new=AsyncMock(return_value=["https://d.com/CLAUDE.md"]),
+            ):
+                return await searcher.search_all(
+                    "CLAUDE.md",
+                    engines=("duckduckgo", "google", "bing", "yandex"),
+                )
+
+        result = asyncio.run(_run())
+        assert "https://a.com/CLAUDE.md" in result
+        assert "https://b.com/CLAUDE.md" in result
+        assert "https://c.com/CLAUDE.md" in result
+        assert "https://d.com/CLAUDE.md" in result

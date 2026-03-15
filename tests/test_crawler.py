@@ -988,3 +988,103 @@ class TestBruteForceFromGitlabUrls:
 
         result = _brute_force_from_gitlab_urls(["https://example.com/file.md"])
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Crawler.crawl — web_dork_sources and Bing engine tests
+# ---------------------------------------------------------------------------
+
+
+class TestCrawlerWebDorkSources:
+    def test_crawl_passes_web_dork_sources_to_searcher(self, tmp_path):
+        """crawl() must forward web_dork_sources to WebSearcher."""
+        crawler = Crawler()
+        urls_file = str(tmp_path / "urls.txt")
+        captured: dict = {}
+
+        async def _fake_search_with_dorks(*, engines, max_dorks, dork_sources):
+            captured["dork_sources"] = dork_sources
+            return []
+
+        async def _run():
+            with patch.object(
+                crawler, "discover_urls", new=AsyncMock(return_value=[])
+            ), patch(
+                "ai_finder.web_search.WebSearcher.search_with_dorks",
+                new=AsyncMock(side_effect=_fake_search_with_dorks),
+            ):
+                return await crawler.crawl(
+                    urls_file=urls_file,
+                    use_github=False,
+                    use_gitlab=False,
+                    use_web_search=True,
+                    web_dork_sources="web",
+                )
+
+        asyncio.run(_run())
+        assert captured.get("dork_sources") == "web"
+
+    def test_crawl_web_dork_sources_default_is_all(self, tmp_path):
+        """crawl() web_dork_sources must default to 'all'."""
+        crawler = Crawler()
+        urls_file = str(tmp_path / "urls.txt")
+        captured: dict = {}
+
+        async def _fake_search_with_dorks(*, engines, max_dorks, dork_sources):
+            captured["dork_sources"] = dork_sources
+            return []
+
+        async def _run():
+            with patch.object(
+                crawler, "discover_urls", new=AsyncMock(return_value=[])
+            ), patch(
+                "ai_finder.web_search.WebSearcher.search_with_dorks",
+                new=AsyncMock(side_effect=_fake_search_with_dorks),
+            ):
+                return await crawler.crawl(
+                    urls_file=urls_file,
+                    use_github=False,
+                    use_gitlab=False,
+                    use_web_search=True,
+                    # web_dork_sources intentionally omitted
+                )
+
+        asyncio.run(_run())
+        assert captured.get("dork_sources") == "all"
+
+    def test_crawl_web_search_includes_bing_by_default(self, tmp_path):
+        """Bing must appear in the default web_search_engines tuple."""
+        from ai_finder.crawler import Crawler as _Crawler
+        import inspect
+
+        sig = inspect.signature(_Crawler.crawl)
+        default_engines = sig.parameters["web_search_engines"].default
+        assert "bing" in default_engines
+
+    def test_crawl_github_only_dork_sources(self, tmp_path):
+        """crawl() must respect web_dork_sources='github'."""
+        crawler = Crawler()
+        urls_file = str(tmp_path / "urls.txt")
+        captured: dict = {}
+
+        async def _fake_search_with_dorks(*, engines, max_dorks, dork_sources):
+            captured["dork_sources"] = dork_sources
+            return []
+
+        async def _run():
+            with patch.object(
+                crawler, "discover_urls", new=AsyncMock(return_value=[])
+            ), patch(
+                "ai_finder.web_search.WebSearcher.search_with_dorks",
+                new=AsyncMock(side_effect=_fake_search_with_dorks),
+            ):
+                return await crawler.crawl(
+                    urls_file=urls_file,
+                    use_github=False,
+                    use_gitlab=False,
+                    use_web_search=True,
+                    web_dork_sources="github",
+                )
+
+        asyncio.run(_run())
+        assert captured.get("dork_sources") == "github"

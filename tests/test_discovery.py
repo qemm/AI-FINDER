@@ -4,12 +4,14 @@ import pytest
 
 from ai_finder.discovery import (
     GoogleDorkGenerator,
+    WebDorkGenerator,
     GitHubQueryGenerator,
     GitLabQueryGenerator,
     S3DorkGenerator,
     SearchQuery,
     TARGET_FILENAMES,
     CONTENT_SIGNATURES,
+    TARGET_PATHS,
     S3_DORK_TERMS,
     GITHUB_RAW_BASE,
     GITLAB_RAW_BASE,
@@ -307,3 +309,122 @@ class TestBuildGitlabRawUrls:
         urls = build_gitlab_raw_urls("group", "project", branches=["main"])
         for fname in TARGET_FILENAMES:
             assert any(url.endswith(fname) for url in urls)
+
+
+# ---------------------------------------------------------------------------
+# WebDorkGenerator — open-web (no site: restriction) dorks
+# ---------------------------------------------------------------------------
+
+
+class TestWebDorkGenerator:
+    def setup_method(self):
+        self.gen = WebDorkGenerator()
+
+    # ---- filename_dorks ----
+
+    def test_filename_dorks_count(self):
+        dorks = list(self.gen.filename_dorks())
+        assert len(dorks) == len(TARGET_FILENAMES)
+
+    def test_filename_dorks_platform_is_web(self):
+        for d in self.gen.filename_dorks():
+            assert d.platform == "web"
+
+    def test_filename_dorks_have_no_site_restriction(self):
+        for d in self.gen.filename_dorks():
+            assert "site:" not in d.query
+
+    def test_filename_dork_uses_intitle(self):
+        dorks = list(self.gen.filename_dorks())
+        assert all(d.query.startswith('intitle:"') for d in dorks)
+
+    def test_filename_dork_contains_fname(self):
+        for fname in TARGET_FILENAMES:
+            dorks = list(self.gen.filename_dorks())
+            assert any(fname in d.query for d in dorks)
+
+    # ---- content_dorks ----
+
+    def test_content_dorks_count(self):
+        dorks = list(self.gen.content_dorks())
+        assert len(dorks) == len(CONTENT_SIGNATURES)
+
+    def test_content_dorks_platform_is_web(self):
+        for d in self.gen.content_dorks():
+            assert d.platform == "web"
+
+    def test_content_dorks_have_no_site_restriction(self):
+        for d in self.gen.content_dorks():
+            assert "site:" not in d.query
+
+    def test_content_dorks_contain_filetype_operators(self):
+        for d in self.gen.content_dorks():
+            assert "filetype:" in d.query
+
+    def test_content_dorks_contain_signature(self):
+        for sig in CONTENT_SIGNATURES:
+            dorks = list(self.gen.content_dorks())
+            assert any(sig in d.query for d in dorks)
+
+    # ---- path_dorks ----
+
+    def test_path_dorks_count(self):
+        dorks = list(self.gen.path_dorks())
+        assert len(dorks) == len(TARGET_PATHS)
+
+    def test_path_dorks_platform_is_web(self):
+        for d in self.gen.path_dorks():
+            assert d.platform == "web"
+
+    def test_path_dorks_have_no_site_restriction(self):
+        for d in self.gen.path_dorks():
+            assert "site:" not in d.query
+
+    def test_path_dorks_use_inurl(self):
+        for d in self.gen.path_dorks():
+            assert "inurl:" in d.query
+
+    # ---- combined_dorks ----
+
+    def test_combined_dorks_cross_product(self):
+        dorks = list(self.gen.combined_dorks())
+        assert len(dorks) == 9  # 3 files × 3 signatures
+
+    def test_combined_dorks_have_no_site_restriction(self):
+        for d in self.gen.combined_dorks():
+            assert "site:" not in d.query
+
+    def test_combined_dorks_platform_is_web(self):
+        for d in self.gen.combined_dorks():
+            assert d.platform == "web"
+
+    # ---- all_dorks ----
+
+    def test_all_dorks_non_empty(self):
+        assert len(self.gen.all_dorks()) > 0
+
+    def test_all_dorks_are_unique(self):
+        dorks = self.gen.all_dorks()
+        queries = [d.query for d in dorks]
+        assert len(queries) == len(set(queries))
+
+    def test_all_dorks_open_web_tag(self):
+        for d in self.gen.all_dorks():
+            assert "open-web" in d.tags
+
+    # ---- compare with GoogleDorkGenerator ----
+
+    def test_web_dorks_are_distinct_from_github_dorks(self):
+        github_queries = {d.query for d in GoogleDorkGenerator().all_dorks()}
+        web_queries = {d.query for d in WebDorkGenerator().all_dorks()}
+        # No web dork should be identical to any github-targeted dork
+        assert github_queries.isdisjoint(web_queries), (
+            "WebDorkGenerator produced queries that overlap with "
+            "GoogleDorkGenerator — web dorks must not have site: restrictions"
+        )
+
+    def test_web_dorks_cover_same_filenames_as_google_dorks(self):
+        """Every filename covered by GoogleDorkGenerator is also covered."""
+        for fname in TARGET_FILENAMES:
+            web_dorks = list(self.gen.filename_dorks())
+            assert any(fname in d.query for d in web_dorks)

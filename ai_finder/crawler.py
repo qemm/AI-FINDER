@@ -267,7 +267,10 @@ class Crawler:
         use_github: bool = True,
         use_gitlab: bool = True,
         use_web_search: bool = False,
-        web_search_engines: tuple[str, ...] = ("duckduckgo", "google", "yandex"),
+        web_search_engines: tuple[str, ...] = (
+            "duckduckgo", "google", "bing", "yandex"
+        ),
+        web_dork_sources: str = "all",
         max_web_dorks: Optional[int] = None,
         max_queries: Optional[int] = None,
         per_page: int = 30,
@@ -285,6 +288,7 @@ class Crawler:
            *depth* directory levels deep.
         4. If *use_web_search* is ``True``, submit dork queries to the search
            engines listed in *web_search_engines* and collect result URLs.
+           Dork generation is controlled by *web_dork_sources*.
         5. Exclude candidates that already appear in *urls_file*.
         6. Optionally filter candidates to HTTP-200 URLs only.
         7. Merge verified URLs with the existing set and rewrite *urls_file*.
@@ -307,7 +311,15 @@ class Crawler:
             collect URLs from the search result pages.
         web_search_engines:
             Tuple of engine names to use when *use_web_search* is ``True``.
-            Valid values: ``"duckduckgo"``, ``"google"``, ``"yandex"``.
+            Valid values: ``"duckduckgo"``, ``"google"``, ``"bing"``,
+            ``"yandex"``.
+        web_dork_sources:
+            Which dork generator(s) to use for web search.  Valid values:
+
+            * ``"github"`` — dorks restricted to ``site:github.com``.
+            * ``"web"`` — generic open-web dorks (no host restriction),
+              finding AI config files on *any* publicly indexed site.
+            * ``"all"`` *(default)* — both sets combined.
         max_web_dorks:
             Cap the number of dork queries sent to each search engine.
             ``None`` means no cap.
@@ -328,12 +340,14 @@ class Crawler:
         """
         log.info(
             "crawl  start  urls_file=%s  target_url=%s  github=%s  gitlab=%s"
-            "  web_search=%s  max_queries=%s  depth=%d  check_reachability=%s",
+            "  web_search=%s  dork_sources=%s  max_queries=%s"
+            "  depth=%d  check_reachability=%s",
             urls_file,
             target_url,
             use_github,
             use_gitlab,
             use_web_search,
+            web_dork_sources,
             max_queries,
             depth,
             check_reachability,
@@ -358,9 +372,13 @@ class Crawler:
             log.info("crawl  path_candidates=%d", len(path_candidates))
             candidates.extend(path_candidates)
 
-        # Web search dorking (Google, DuckDuckGo, Yandex)
+        # Web search dorking across multiple search engines
         if use_web_search:
-            log.info("crawl  web_search  engines=%s", web_search_engines)
+            log.info(
+                "crawl  web_search  engines=%s  dork_sources=%s",
+                web_search_engines,
+                web_dork_sources,
+            )
             # Deferred import avoids a hard dependency on web_search for users
             # who never enable this feature, and prevents any circular-import risk.
             from ai_finder.web_search import WebSearcher  # noqa: PLC0415
@@ -371,6 +389,7 @@ class Crawler:
                 web_urls = await searcher.search_with_dorks(
                     engines=web_search_engines,
                     max_dorks=max_web_dorks,
+                    dork_sources=web_dork_sources,
                 )
             log.info("crawl  web_search_candidates=%d", len(web_urls))
             candidates.extend(web_urls)
