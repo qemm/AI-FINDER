@@ -99,3 +99,92 @@ def configure_logging(
         file_handler.setLevel(numeric_level)
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
+
+
+# ---------------------------------------------------------------------------
+# aiohttp request/response trace config (enabled at DEBUG level)
+# ---------------------------------------------------------------------------
+
+_HTTP_TRACE_LOG = logging.getLogger("ai_finder.http")
+
+
+def build_trace_config():  # type: ignore[return]
+    """Return an :class:`aiohttp.TraceConfig` that logs every HTTP request and
+    response at ``DEBUG`` level under the ``ai_finder.http`` logger.
+
+    Attach the returned object to any :class:`aiohttp.ClientSession` to get
+    full request/response traces::
+
+        import aiohttp
+        from ai_finder.logger import build_trace_config
+
+        async with aiohttp.ClientSession(
+            trace_configs=[build_trace_config()]
+        ) as session:
+            ...
+
+    The ``Authorization`` header value is automatically redacted so that
+    tokens are never written to log files in plain text.
+    """
+    import aiohttp  # local import keeps logger.py free of hard dependencies
+
+    tc = aiohttp.TraceConfig()
+
+    def _redact_headers(headers: object) -> dict[str, str]:
+        """Return a plain dict copy of *headers* with the Authorization value masked."""
+        result: dict[str, str] = {}
+        for k, v in dict(headers).items():  # type: ignore[arg-type]
+            if k.lower() == "authorization":
+                parts = v.split(" ", 1)
+                v = f"{parts[0]} [REDACTED]" if len(parts) == 2 else "[REDACTED]"
+            result[k] = v
+        return result
+
+    async def _on_request_start(
+        session: object,
+        ctx: object,
+        params: "aiohttp.TraceRequestStartParams",
+    ) -> None:
+        if not _HTTP_TRACE_LOG.isEnabledFor(logging.DEBUG):
+            return
+        _HTTP_TRACE_LOG.debug(
+            ">>> %s %s\n    headers: %s",
+            params.method,
+            params.url,
+            _redact_headers(params.headers),
+        )
+
+    async def _on_request_end(
+        session: object,
+        ctx: object,
+        params: "aiohttp.TraceRequestEndParams",
+    ) -> None:
+        if not _HTTP_TRACE_LOG.isEnabledFor(logging.DEBUG):
+            return
+        resp = params.response
+        _HTTP_TRACE_LOG.debug(
+            "<<< %s %s  status=%d\n    resp-headers: %s",
+            params.method,
+            params.url,
+            resp.status,
+            dict(resp.headers),
+        )
+
+    async def _on_request_exception(
+        session: object,
+        ctx: object,
+        params: "aiohttp.TraceRequestExceptionParams",
+    ) -> None:
+        if not _HTTP_TRACE_LOG.isEnabledFor(logging.DEBUG):
+            return
+        _HTTP_TRACE_LOG.debug(
+            "!!! %s %s  exception=%s",
+            params.method,
+            params.url,
+            params.exception,
+        )
+
+    tc.on_request_start.append(_on_request_start)
+    tc.on_request_end.append(_on_request_end)
+    tc.on_request_exception.append(_on_request_exception)
+    return tc

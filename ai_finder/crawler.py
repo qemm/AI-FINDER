@@ -42,7 +42,7 @@ from ai_finder.discovery import (
     COMMON_DIRECTORIES,
 )
 from ai_finder.extractor import DEFAULT_HEADERS, DEFAULT_TIMEOUT, FileExtractor
-from ai_finder.logger import get_logger
+from ai_finder.logger import get_logger, build_trace_config
 
 log = get_logger(__name__)
 
@@ -192,7 +192,9 @@ class Crawler:
                 return url, ok
 
         async with aiohttp.ClientSession(
-            timeout=self._timeout, headers=DEFAULT_HEADERS
+            timeout=self._timeout,
+            headers=DEFAULT_HEADERS,
+            trace_configs=[build_trace_config()],
         ) as session:
             results = await asyncio.gather(
                 *(_check(session, u) for u in urls)

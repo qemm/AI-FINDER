@@ -34,7 +34,7 @@ from bs4 import BeautifulSoup
 
 from ai_finder.discovery import GoogleDorkGenerator, WebDorkGenerator
 from ai_finder.extractor import DEFAULT_TIMEOUT
-from ai_finder.logger import get_logger
+from ai_finder.logger import get_logger, build_trace_config
 
 log = get_logger(__name__)
 
@@ -176,7 +176,9 @@ class WebSearcher:
     async def __aenter__(self) -> "WebSearcher":
         if self._owns_session:
             self._session = aiohttp.ClientSession(
-                timeout=self._timeout, headers=self._headers
+                timeout=self._timeout,
+                headers=self._headers,
+                trace_configs=[build_trace_config()],
             )
         return self
 

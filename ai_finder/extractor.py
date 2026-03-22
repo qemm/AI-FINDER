@@ -19,7 +19,7 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 from bs4 import BeautifulSoup
 
-from ai_finder.logger import get_logger
+from ai_finder.logger import get_logger, build_trace_config
 
 log = get_logger(__name__)
 
@@ -192,7 +192,9 @@ class FileExtractor:
     async def __aenter__(self) -> "FileExtractor":
         if self._owns_session:
             self._session = aiohttp.ClientSession(
-                timeout=self._timeout, headers=self._headers
+                timeout=self._timeout,
+                headers=self._headers,
+                trace_configs=[build_trace_config()],
             )
         return self
 
