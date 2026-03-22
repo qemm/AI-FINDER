@@ -118,6 +118,7 @@ async def run_crawl(args: argparse.Namespace) -> None:
     crawler = Crawler(
         github_token=args.token,
         gitlab_token=args.gitlab_token,
+        captcha_pause=not args.no_captcha_pause,
     )
 
     new_urls = await crawler.crawl(
@@ -397,6 +398,16 @@ def parse_args() -> argparse.Namespace:
         "--no-check",
         action="store_true",
         help="Skip reachability check during --crawl (write all discovered URLs).",
+    )
+    parser.add_argument(
+        "--no-captcha-pause",
+        action="store_true",
+        help=(
+            "Disable interactive CAPTCHA handling during web search. "
+            "When a search engine returns a CAPTCHA page the query is "
+            "silently skipped instead of opening a browser and waiting "
+            "for user input. Useful in headless / CI environments."
+        ),
     )
     parser.add_argument(
         "--max-queries",

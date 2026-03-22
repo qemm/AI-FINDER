@@ -67,6 +67,12 @@ class Crawler:
         reachability check phase.
     timeout:
         ``aiohttp.ClientTimeout`` applied to every HTTP request.
+    captcha_pause:
+        When ``True`` (the default), the crawler pauses when a search engine
+        returns a CAPTCHA page, opens the CAPTCHA URL in the default browser,
+        and waits for the user to solve it before retrying the request once.
+        Set to ``False`` to skip CAPTCHA prompts (useful in headless / CI
+        environments where interactive input is not available).
     """
 
     def __init__(
@@ -76,12 +82,14 @@ class Crawler:
         concurrency: int = 10,
         timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT,
         request_delay: float = 1.0,
+        captcha_pause: bool = True,
     ) -> None:
         self._github_token = github_token
         self._gitlab_token = gitlab_token
         self._concurrency = concurrency
         self._timeout = timeout
         self._request_delay = request_delay
+        self._captcha_pause = captcha_pause
 
     # ------------------------------------------------------------------
     # Public API
@@ -386,7 +394,9 @@ class Crawler:
             from ai_finder.web_search import WebSearcher  # noqa: PLC0415
 
             async with WebSearcher(
-                timeout=self._timeout, request_delay=self._request_delay
+                timeout=self._timeout,
+                request_delay=self._request_delay,
+                captcha_pause=self._captcha_pause,
             ) as searcher:
                 web_urls = await searcher.search_with_dorks(
                     engines=web_search_engines,

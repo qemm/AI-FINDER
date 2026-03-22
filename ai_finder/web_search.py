@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
+import webbrowser
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -162,12 +164,14 @@ class WebSearcher:
         timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT,
         headers: Optional[dict[str, str]] = None,
         request_delay: float = 2.0,
+        captcha_pause: bool = True,
     ) -> None:
         self._session = session
         self._owns_session = session is None
         self._timeout = timeout
         self._headers = headers if headers is not None else _SEARCH_HEADERS
         self._request_delay = request_delay
+        self._captcha_pause = captcha_pause
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -276,6 +280,12 @@ class WebSearcher:
             params={"text": query, "numdoc": max_results},
         )
         if not html:
+            log.info(
+                "yandex  blocked or no results  query=%r  "
+                "— Yandex is rate-limiting / showing a CAPTCHA; "
+                "try removing 'yandex' from --web-search-engines",
+                query,
+            )
             return []
         urls = self._extract_urls_from_html(html)
         log.debug("yandex  found=%d  query=%r", len(urls), query)
@@ -431,15 +441,77 @@ class WebSearcher:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _fetch_page(self, url: str, params: dict) -> str:
+    # URL path fragments that indicate a CAPTCHA / bot-block page.  Checked
+    # against the *final* URL after redirects (resp.url).
+    _CAPTCHA_PATH_FRAGMENTS: tuple[str, ...] = (
+        "/showcaptcha",   # Yandex
+        "/sorry/index",   # Google reCAPTCHA
+        "/search/unlock", # Bing bot-unlock
+    )
+
+    async def _handle_captcha(self, captcha_url: str, engine_url: str) -> None:
+        """Open *captcha_url* in the default browser and wait asynchronously
+        for the user to solve it before continuing.
+
+        The method prints a prominent banner, opens the browser, then
+        suspends the coroutine (without blocking the event loop) until the
+        user presses **Enter**.  After returning, ``_fetch_page`` retries
+        the original request — Yandex and Google often use IP-based
+        challenges, so a solved CAPTCHA in the browser is enough to lift
+        the block for a short window.
+        """
+        print(
+            f"\n{'=' * 62}\n"
+            f"[!] CAPTCHA / bot-block detected\n"
+            f"    Engine  : {engine_url}\n"
+            f"    CAPTCHA : {captcha_url}\n"
+            f"\n"
+            f"    A browser window will open. Solve the CAPTCHA there,\n"
+            f"    then come back here and press Enter to continue...\n"
+            f"{'=' * 62}",
+            flush=True,
+        )
+        webbrowser.open(captcha_url)
+        # Run blocking stdin.readline in a thread so the event loop stays free.
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, sys.stdin.readline)
+        print("[*] Resuming URL extraction...", flush=True)
+
+    async def _fetch_page(
+        self, url: str, params: dict, *, _retry: bool = False
+    ) -> str:
         """Fetch *url* with *params* and return the response text.
 
-        Returns an empty string on any error or non-200 response so that
-        callers can treat all failure modes uniformly.
+        When a CAPTCHA / bot-block redirect is detected and
+        ``captcha_pause`` is enabled, the method opens the CAPTCHA URL in
+        the default browser, waits asynchronously for the user to press
+        Enter, then retries the request **once**.  If the second attempt
+        also hits a CAPTCHA the engine is skipped and an empty string is
+        returned.
+
+        Returns an empty string on any error or non-200 response.
         """
         try:
             assert self._session is not None, "Call inside async context manager"
             async with self._session.get(url, params=params) as resp:
+                final_url = str(resp.url)
+                # Detect CAPTCHA / bot-block redirects before reading the body.
+                for fragment in self._CAPTCHA_PATH_FRAGMENTS:
+                    if fragment in final_url:
+                        if self._captcha_pause and not _retry:
+                            await self._handle_captcha(final_url, url)
+                            # Retry once after the user solved the CAPTCHA.
+                            return await self._fetch_page(
+                                url, params, _retry=True
+                            )
+                        log.warning(
+                            "_fetch_page  CAPTCHA/bot-block detected  "
+                            "engine=%s  final_url=%s  "
+                            "— skipping (captcha_pause=False or retry exhausted)",
+                            url,
+                            final_url,
+                        )
+                        return ""
                 if resp.status != 200:
                     log.warning(
                         "_fetch_page  non-200  status=%d  url=%s", resp.status, url
