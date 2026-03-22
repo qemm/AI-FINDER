@@ -1,0 +1,73 @@
+# AI-FINDER — Example target URLs
+# Format: one raw-content URL per line.
+# Blank lines and lines starting with # are ignored by the tool.
+#
+# Categories:
+#   [CLAUDE.md]        — Anthropic Claude agent instruction files
+#   [AGENTS.md]        — Generic agent rule files
+#   [.cursorrules]     — Cursor IDE AI configuration
+#   [copilot]          — GitHub Copilot instructions
+#   [system_prompt]    — Exposed system prompt files
+#   [agent_config]     — Framework config files (LangChain, CrewAI, etc.)
+#   [GitLab]           — GitLab raw-content URLs
+
+# ── CLAUDE.md ──────────────────────────────────────────────────────────────
+https://raw.githubusercontent.com/anthropics/anthropic-cookbook/main/CLAUDE.md
+https://raw.githubusercontent.com/anthropics/anthropic-sdk-python/main/CLAUDE.md
+https://raw.githubusercontent.com/anthropics/claude-code/main/CLAUDE.md
+https://raw.githubusercontent.com/BerriAI/litellm/main/CLAUDE.md
+https://raw.githubusercontent.com/microsoft/autogen/main/CLAUDE.md
+https://raw.githubusercontent.com/joaomdmoura/crewAI/main/CLAUDE.md
+https://raw.githubusercontent.com/langchain-ai/langchain/master/CLAUDE.md
+https://raw.githubusercontent.com/run-llama/llama_index/main/CLAUDE.md
+https://raw.githubusercontent.com/openai/openai-python/main/CLAUDE.md
+https://raw.githubusercontent.com/Significant-Gravitas/AutoGPT/master/CLAUDE.md
+
+# ── AGENTS.md ──────────────────────────────────────────────────────────────
+https://raw.githubusercontent.com/anthropics/anthropic-cookbook/main/AGENTS.md
+https://raw.githubusercontent.com/anthropics/claude-code/main/AGENTS.md
+https://raw.githubusercontent.com/BerriAI/litellm/main/AGENTS.md
+https://raw.githubusercontent.com/microsoft/autogen/main/AGENTS.md
+https://raw.githubusercontent.com/run-llama/llama_index/main/AGENTS.md
+https://raw.githubusercontent.com/openai/openai-python/main/AGENTS.md
+https://raw.githubusercontent.com/langchain-ai/langchain/master/AGENTS.md
+https://raw.githubusercontent.com/Significant-Gravitas/AutoGPT/master/AGENTS.md
+https://raw.githubusercontent.com/joaomdmoura/crewAI/main/AGENTS.md
+https://raw.githubusercontent.com/smol-ai/developer/main/AGENTS.md
+
+# ── .cursorrules ───────────────────────────────────────────────────────────
+https://raw.githubusercontent.com/PatrickJS/awesome-cursorrules/main/.cursorrules
+https://raw.githubusercontent.com/pontusab/cursor.directory/main/.cursorrules
+https://raw.githubusercontent.com/paul-gauthier/aider/main/.cursorrules
+https://raw.githubusercontent.com/langchain-ai/langchain/master/.cursorrules
+https://raw.githubusercontent.com/run-llama/llama_index/main/.cursorrules
+https://raw.githubusercontent.com/pydantic/pydantic-ai/main/.cursorrules
+https://raw.githubusercontent.com/BerriAI/litellm/main/.cursorrules
+https://raw.githubusercontent.com/microsoft/semantic-kernel/main/.cursorrules
+
+# ── GitHub Copilot instructions (.github/copilot-instructions.md) ──────────
+https://raw.githubusercontent.com/anthropics/anthropic-cookbook/main/.github/copilot-instructions.md
+https://raw.githubusercontent.com/langchain-ai/langchain/master/.github/copilot-instructions.md
+https://raw.githubusercontent.com/microsoft/autogen/main/.github/copilot-instructions.md
+https://raw.githubusercontent.com/openai/openai-python/main/.github/copilot-instructions.md
+https://raw.githubusercontent.com/pydantic/pydantic-ai/main/.github/copilot-instructions.md
+
+# ── system_prompt files ────────────────────────────────────────────────────
+https://raw.githubusercontent.com/anthropics/anthropic-cookbook/main/system_prompt.md
+https://raw.githubusercontent.com/smol-ai/developer/main/system_prompt.md
+https://raw.githubusercontent.com/Significant-Gravitas/AutoGPT/master/system_prompt.txt
+https://raw.githubusercontent.com/paul-gauthier/aider/main/system_prompt.md
+https://raw.githubusercontent.com/joaomdmoura/crewAI/main/prompts/system_prompt.md
+
+# ── Agent / framework config files ────────────────────────────────────────
+https://raw.githubusercontent.com/langchain-ai/langchain/master/langchain_config.yaml
+https://raw.githubusercontent.com/joaomdmoura/crewAI/main/crewai_config.yaml
+https://raw.githubusercontent.com/microsoft/autogen/main/agent_config.json
+https://raw.githubusercontent.com/BerriAI/litellm/main/openai_config.json
+https://raw.githubusercontent.com/pydantic/pydantic-ai/main/agent_config.yaml
+
+# ── GitLab raw-content URLs ────────────────────────────────────────────────
+https://gitlab.com/gitlab-org/gitlab/-/raw/master/CLAUDE.md
+https://gitlab.com/gitlab-org/gitlab/-/raw/master/AGENTS.md
+https://gitlab.com/gitlab-org/gitlab/-/raw/master/.cursorrules
+https://gitlab.com/gitlab-org/gitlab/-/raw/master/system_prompt.md
