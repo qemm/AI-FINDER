@@ -134,6 +134,21 @@ async def run_crawl(args: argparse.Namespace) -> None:
         print(f"\n[✓] {len(new_urls)} new URL(s) added to '{urls_file}':")
         for url in new_urls:
             print(f"    {url}")
+
+        # Fetch content, classify, scan for secrets, store in DB + JSON.
+        print(f"\n[*] Fetching & storing {len(new_urls)} discovered URL(s)…")
+        await run_pipeline(
+            urls=list(new_urls),
+            db_path=args.db,
+            json_path=args.json,
+            github_token=args.token,
+            github_search=False,   # already searched above
+            gitlab_token=args.gitlab_token,
+            gitlab_search=False,   # already searched above
+            verbose=args.verbose,
+            vector_db_path=args.vector_db,
+            semantic_query=None,
+        )
     else:
         print(f"\n[i] No new URLs found (file '{urls_file}' unchanged).")
 
