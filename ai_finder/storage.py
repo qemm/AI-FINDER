@@ -206,6 +206,160 @@ class Storage:
             row = conn.execute("SELECT COUNT(*) FROM files").fetchone()
             return int(row[0])
 
+    def list_files(
+        self,
+        platform: Optional[str] = None,
+        has_secrets: Optional[bool] = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> list[dict]:
+        """Return a paginated list of files with optional filters."""
+        clauses: list[str] = []
+        params: list = []
+        if platform:
+            clauses.append("platform = ?")
+            params.append(platform)
+        if has_secrets is not None:
+            clauses.append("has_secrets = ?")
+            params.append(int(has_secrets))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        offset = (page - 1) * page_size
+        params.extend([page_size, offset])
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT id, url, content_hash, platform, indexed_at, tags, has_secrets "  # noqa: S608
+                f"FROM files {where} ORDER BY indexed_at DESC LIMIT ? OFFSET ?",
+                params,
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def count_files(
+        self,
+        platform: Optional[str] = None,
+        has_secrets: Optional[bool] = None,
+    ) -> int:
+        """Return the total count of files matching the optional filters."""
+        clauses: list[str] = []
+        params: list = []
+        if platform:
+            clauses.append("platform = ?")
+            params.append(platform)
+        if has_secrets is not None:
+            clauses.append("has_secrets = ?")
+            params.append(int(has_secrets))
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM files {where}",  # noqa: S608
+                params,
+            ).fetchone()
+            return int(row[0])
+
+    def get_file(self, file_id: int) -> Optional[dict]:
+        """Return a single file row by id, or None if not found."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM files WHERE id = ?", (file_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_file_secrets(self, file_id: int) -> list[dict]:
+        """Return all secret_findings rows for *file_id*."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM secret_findings WHERE file_id = ? ORDER BY line_number",
+                (file_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_secrets(
+        self,
+        rule_name: Optional[str] = None,
+        platform: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> list[dict]:
+        """Return paginated secret findings joined with file metadata."""
+        clauses: list[str] = []
+        params: list = []
+        if rule_name:
+            clauses.append("sf.rule_name = ?")
+            params.append(rule_name)
+        if platform:
+            clauses.append("f.platform = ?")
+            params.append(platform)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        offset = (page - 1) * page_size
+        params.extend([page_size, offset])
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT sf.id, sf.file_id, sf.rule_name, sf.line_number,
+                       sf.redacted, sf.context,
+                       f.url, f.platform, f.indexed_at
+                FROM secret_findings sf
+                JOIN files f ON f.id = sf.file_id
+                {where}
+                ORDER BY f.indexed_at DESC, sf.id
+                LIMIT ? OFFSET ?
+                """,  # noqa: S608
+                params,
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def count_secrets(
+        self,
+        rule_name: Optional[str] = None,
+        platform: Optional[str] = None,
+    ) -> int:
+        """Return the total count of secret findings matching the optional filters."""
+        clauses: list[str] = []
+        params: list = []
+        if rule_name:
+            clauses.append("sf.rule_name = ?")
+            params.append(rule_name)
+        if platform:
+            clauses.append("f.platform = ?")
+            params.append(platform)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._conn() as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM secret_findings sf
+                JOIN files f ON f.id = sf.file_id
+                {where}
+                """,  # noqa: S608
+                params,
+            ).fetchone()
+            return int(row[0])
+
+    def secrets_by_rule(self) -> list[dict]:
+        """Return secret finding counts grouped by rule_name, descending."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT rule_name, COUNT(*) AS count
+                FROM secret_findings
+                GROUP BY rule_name
+                ORDER BY count DESC
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def platform_stats(self) -> list[dict]:
+        """Return file counts grouped by platform, descending."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT platform, COUNT(*) AS count
+                FROM files
+                GROUP BY platform
+                ORDER BY count DESC
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     # ------------------------------------------------------------------
     # Export
     # ------------------------------------------------------------------

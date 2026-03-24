@@ -1,0 +1,40 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: ai-finder-api:dev
+    volumes:
+      - ./ai_finder:/app/ai_finder
+      - ./backend:/app/backend
+      - ai_finder_data:/app/data
+    ports:
+      - "8000:8000"
+    environment:
+      DB_PATH: /app/data/ai_finder.db
+      VECTOR_DB_PATH: /app/data/vector_db
+      URLS_FILE: /app/data/urls.txt
+      EXPORT_PATH: /app/data/export.json
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: ai-finder-frontend:dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    environment:
+      NODE_ENV: development
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  ai_finder_data:
