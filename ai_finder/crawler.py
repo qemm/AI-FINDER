@@ -276,7 +276,7 @@ class Crawler:
         target_url: Optional[str] = None,
         use_github: bool = True,
         use_gitlab: bool = True,
-        use_web_search: bool = True,
+        use_web_search: bool = False,
         web_search_engines: tuple[str, ...] = (
             "duckduckgo", "google", "bing", "yandex"
         ),

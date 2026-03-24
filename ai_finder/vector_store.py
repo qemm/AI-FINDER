@@ -56,11 +56,17 @@ class _HashEmbeddingFunction(EmbeddingFunction):
     def __init__(self) -> None:
         super().__init__()
 
-    def name(self) -> str:  # required by newer chromadb versions
+    @classmethod
+    def name(cls) -> str:  # required by newer chromadb versions
         return "hash_embedding"
 
     def get_config(self) -> dict:  # required by newer chromadb versions
         return {"dim": _EMBEDDING_DIM}
+
+    @classmethod
+    def build_from_config(cls, config: dict) -> "_HashEmbeddingFunction":  # noqa: ARG003
+        """Reconstruct from a config dict (required by newer chromadb versions)."""
+        return cls()
 
     def __call__(self, input: list[str]) -> Embeddings:  # type: ignore[override]
         result: list[list[float]] = []

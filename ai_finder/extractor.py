@@ -211,7 +211,11 @@ class FileExtractor:
         raw_url = to_raw_url(url)
         log.debug("fetch  url=%s  raw_url=%s", url, raw_url)
         try:
-            assert self._session is not None, "Call inside async context manager"
+            if self._session is None:
+                raise RuntimeError(
+                    "FileExtractor must be used as an async context manager "
+                    "(i.e. `async with FileExtractor() as e:`)"
+                )
             async with self._session.get(raw_url) as resp:
                 resp.raise_for_status()
                 text = await resp.text(errors="replace")
@@ -270,7 +274,10 @@ class FileExtractor:
         api_url = "https://api.github.com/search/code"
         log.debug("github_search  query=%r  per_page=%d  page=%d", query, per_page, page)
         try:
-            assert self._session is not None
+            if self._session is None:
+                raise RuntimeError(
+                    "FileExtractor must be used as an async context manager"
+                )
             async with self._session.get(
                 api_url,
                 params=params,
@@ -329,7 +336,10 @@ class FileExtractor:
             extra_headers["PRIVATE-TOKEN"] = gitlab_token
         log.debug("gitlab_search  query=%r  per_page=%d  page=%d", query, per_page, page)
         try:
-            assert self._session is not None
+            if self._session is None:
+                raise RuntimeError(
+                    "FileExtractor must be used as an async context manager"
+                )
             async with self._session.get(
                 api_url,
                 params=params,
