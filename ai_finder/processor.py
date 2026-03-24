@@ -218,8 +218,12 @@ class FileProcessor:
             return "unknown", 0.0
 
         best_platform = max(scores, key=lambda k: scores[k])
-        max_possible = max(len(rules) for _, rules in _PLATFORM_RULES)
-        confidence = min(scores[best_platform] / max_possible, 1.0)
+        # Divide by the winning platform's own pattern count so that a
+        # platform matching all its patterns scores 1.0, not a fraction of
+        # the largest platform's pattern count.
+        _platform_pattern_counts = {name: len(rules) for name, rules in _PLATFORM_RULES}
+        own_max = _platform_pattern_counts.get(best_platform, 1)
+        confidence = min(scores[best_platform] / own_max, 1.0)
         return best_platform, round(confidence, 2)
 
     @staticmethod
