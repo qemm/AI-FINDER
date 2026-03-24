@@ -37,6 +37,7 @@ from bs4 import BeautifulSoup
 from ai_finder.discovery import GoogleDorkGenerator, WebDorkGenerator
 from ai_finder.extractor import DEFAULT_TIMEOUT
 from ai_finder.logger import get_logger, build_trace_config
+from ai_finder.rate_limiter import RateLimiter
 
 log = get_logger(__name__)
 
@@ -165,6 +166,7 @@ class WebSearcher:
         headers: Optional[dict[str, str]] = None,
         request_delay: float = 2.0,
         captcha_pause: bool = True,
+        rate_limiter: Optional[RateLimiter] = None,
     ) -> None:
         self._session = session
         self._owns_session = session is None
@@ -172,6 +174,7 @@ class WebSearcher:
         self._headers = headers if headers is not None else _SEARCH_HEADERS
         self._request_delay = request_delay
         self._captcha_pause = captcha_pause
+        self._rate_limiter = rate_limiter if rate_limiter is not None else RateLimiter()
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -216,9 +219,12 @@ class WebSearcher:
             External HTTP/HTTPS URLs extracted from the result page.
         """
         log.debug("duckduckgo  query=%r", query)
+        await self._rate_limiter.acquire("duckduckgo")
         html = await self._fetch_page(
             "https://html.duckduckgo.com/html/",
             params={"q": query},
+            engine="duckduckgo",
+            headers=self._rate_limiter.get_headers(self._headers),
         )
         if not html:
             return []
@@ -247,9 +253,12 @@ class WebSearcher:
             External HTTP/HTTPS URLs extracted from the result page.
         """
         log.debug("google  query=%r", query)
+        await self._rate_limiter.acquire("google")
         html = await self._fetch_page(
             "https://www.google.com/search",
             params={"q": query, "num": max_results},
+            engine="google",
+            headers=self._rate_limiter.get_headers(self._headers),
         )
         if not html:
             return []
@@ -275,9 +284,12 @@ class WebSearcher:
             External HTTP/HTTPS URLs extracted from the result page.
         """
         log.debug("yandex  query=%r", query)
+        await self._rate_limiter.acquire("yandex")
         html = await self._fetch_page(
             "https://yandex.com/search/",
             params={"text": query, "numdoc": max_results},
+            engine="yandex",
+            headers=self._rate_limiter.get_headers(self._headers),
         )
         if not html:
             log.info(
@@ -312,9 +324,12 @@ class WebSearcher:
             External HTTP/HTTPS URLs extracted from the result page.
         """
         log.debug("bing  query=%r", query)
+        await self._rate_limiter.acquire("bing")
         html = await self._fetch_page(
             "https://www.bing.com/search",
             params={"q": query, "count": max_results},
+            engine="bing",
+            headers=self._rate_limiter.get_headers(self._headers),
         )
         if not html:
             return []
@@ -420,9 +435,7 @@ class WebSearcher:
             dork_sources,
         )
         all_urls: list[str] = []
-        for i, dork in enumerate(dorks):
-            if i > 0 and self._request_delay > 0:
-                await asyncio.sleep(self._request_delay)
+        for dork in dorks:
             urls = await self.search_all(
                 dork.query,
                 engines=engines,
@@ -478,7 +491,13 @@ class WebSearcher:
         print("[*] Resuming URL extraction...", flush=True)
 
     async def _fetch_page(
-        self, url: str, params: dict, *, _retry: bool = False
+        self,
+        url: str,
+        params: dict,
+        *,
+        engine: str = "default",
+        headers: Optional[dict[str, str]] = None,
+        _retry: bool = False,
     ) -> str:
         """Fetch *url* with *params* and return the response text.
 
@@ -489,11 +508,17 @@ class WebSearcher:
         also hits a CAPTCHA the engine is skipped and an empty string is
         returned.
 
+        HTTP 429 responses trigger a fixed backoff pause (looked up from the
+        :class:`~ai_finder.rate_limiter.RateLimiter` using *engine*) and
+        are retried once.
+
         Returns an empty string on any error or non-200 response.
         """
         try:
             assert self._session is not None, "Call inside async context manager"
-            async with self._session.get(url, params=params) as resp:
+            async with self._session.get(
+                url, params=params, headers=headers
+            ) as resp:
                 final_url = str(resp.url)
                 # Detect CAPTCHA / bot-block redirects before reading the body.
                 for fragment in self._CAPTCHA_PATH_FRAGMENTS:
@@ -502,7 +527,8 @@ class WebSearcher:
                             await self._handle_captcha(final_url, url)
                             # Retry once after the user solved the CAPTCHA.
                             return await self._fetch_page(
-                                url, params, _retry=True
+                                url, params,
+                                engine=engine, headers=headers, _retry=True,
                             )
                         log.warning(
                             "_fetch_page  CAPTCHA/bot-block detected  "
@@ -512,6 +538,24 @@ class WebSearcher:
                             final_url,
                         )
                         return ""
+                if resp.status == 429:
+                    if not _retry:
+                        pause = self._rate_limiter.get_backoff_pause(engine)
+                        log.warning(
+                            "_fetch_page  429 rate-limited  engine=%s  "
+                            "backoff=%.0fs  url=%s",
+                            engine, pause, url,
+                        )
+                        await asyncio.sleep(pause)
+                        return await self._fetch_page(
+                            url, params,
+                            engine=engine, headers=headers, _retry=True,
+                        )
+                    log.warning(
+                        "_fetch_page  429 retry exhausted  engine=%s  url=%s",
+                        engine, url,
+                    )
+                    return ""
                 if resp.status != 200:
                     log.warning(
                         "_fetch_page  non-200  status=%d  url=%s", resp.status, url

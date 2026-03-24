@@ -43,6 +43,7 @@ from ai_finder.discovery import (
 )
 from ai_finder.extractor import DEFAULT_HEADERS, DEFAULT_TIMEOUT, FileExtractor
 from ai_finder.logger import get_logger, build_trace_config
+from ai_finder.rate_limiter import RateLimiter
 
 log = get_logger(__name__)
 
@@ -83,6 +84,7 @@ class Crawler:
         timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT,
         request_delay: float = 1.0,
         captcha_pause: bool = True,
+        rate_limiter: Optional[RateLimiter] = None,
     ) -> None:
         self._github_token = github_token
         self._gitlab_token = gitlab_token
@@ -90,6 +92,7 @@ class Crawler:
         self._timeout = timeout
         self._request_delay = request_delay
         self._captcha_pause = captcha_pause
+        self._rate_limiter = rate_limiter if rate_limiter is not None else RateLimiter()
 
     # ------------------------------------------------------------------
     # Public API
@@ -128,6 +131,7 @@ class Crawler:
         async with FileExtractor(
             github_token=self._github_token,
             timeout=self._timeout,
+            rate_limiter=self._rate_limiter,
         ) as extractor:
             if use_github:
                 found.extend(
@@ -397,6 +401,7 @@ class Crawler:
                 timeout=self._timeout,
                 request_delay=self._request_delay,
                 captcha_pause=self._captcha_pause,
+                rate_limiter=self._rate_limiter,
             ) as searcher:
                 web_urls = await searcher.search_with_dorks(
                     engines=web_search_engines,
@@ -447,8 +452,8 @@ class Crawler:
         log.info("_search_github  queries=%d  per_page=%d", len(queries), per_page)
         urls: list[str] = []
         for i, sq in enumerate(queries):
-            if i > 0 and self._request_delay > 0:
-                await asyncio.sleep(self._request_delay)
+            if i > 0:
+                await self._rate_limiter.acquire("github")
             log.debug("_search_github  query=%r", sq.query)
             found = await extractor.search_github(sq.query, per_page=per_page)
             log.debug("_search_github  found=%d  query=%r", len(found), sq.query)
@@ -472,8 +477,8 @@ class Crawler:
         log.info("_search_gitlab  queries=%d  per_page=%d", len(queries), per_page)
         urls: list[str] = []
         for i, sq in enumerate(queries):
-            if i > 0 and self._request_delay > 0:
-                await asyncio.sleep(self._request_delay)
+            if i > 0:
+                await self._rate_limiter.acquire("gitlab")
             log.debug("_search_gitlab  query=%r", sq.query)
             found = await extractor.search_gitlab(
                 sq.query,

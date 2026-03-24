@@ -20,6 +20,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 from ai_finder.logger import get_logger, build_trace_config
+from ai_finder.rate_limiter import RateLimiter
 
 log = get_logger(__name__)
 
@@ -177,6 +178,7 @@ class FileExtractor:
         timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT,
         headers: dict = DEFAULT_HEADERS,
         github_token: Optional[str] = None,
+        rate_limiter: Optional[RateLimiter] = None,
     ) -> None:
         self._session = session
         self._owns_session = session is None
@@ -184,6 +186,7 @@ class FileExtractor:
         self._headers = dict(headers)
         if github_token:
             self._headers["Authorization"] = f"token {github_token}"
+        self._rate_limiter = rate_limiter
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -210,13 +213,18 @@ class FileExtractor:
         """Fetch *url* and return an :class:`ExtractedFile`."""
         raw_url = to_raw_url(url)
         log.debug("fetch  url=%s  raw_url=%s", url, raw_url)
+        req_headers = (
+            self._rate_limiter.get_headers(self._headers)
+            if self._rate_limiter is not None
+            else None
+        )
         try:
             if self._session is None:
                 raise RuntimeError(
                     "FileExtractor must be used as an async context manager "
                     "(i.e. `async with FileExtractor() as e:`)"
                 )
-            async with self._session.get(raw_url) as resp:
+            async with self._session.get(raw_url, headers=req_headers) as resp:
                 resp.raise_for_status()
                 text = await resp.text(errors="replace")
                 log.debug(
@@ -263,15 +271,20 @@ class FileExtractor:
     # ------------------------------------------------------------------
 
     async def search_github(
-        self, query: str, per_page: int = 30, page: int = 1
+        self, query: str, per_page: int = 30, page: int = 1, *, _retried: bool = False
     ) -> list[str]:
         """Call the GitHub Code Search API and return raw-content URLs.
 
         Requires a GitHub token in the Authorization header for best results.
         Returns an empty list on error (rate-limit, network, etc.).
         """
+        if self._rate_limiter is not None:
+            await self._rate_limiter.acquire("github")
         params = {"q": query, "per_page": per_page, "page": page}
         api_url = "https://api.github.com/search/code"
+        req_headers = {**self._headers, "Accept": "application/vnd.github+json"}
+        if self._rate_limiter is not None:
+            req_headers = self._rate_limiter.get_headers(req_headers)
         log.debug("github_search  query=%r  per_page=%d  page=%d", query, per_page, page)
         try:
             if self._session is None:
@@ -281,13 +294,23 @@ class FileExtractor:
             async with self._session.get(
                 api_url,
                 params=params,
-                headers={**self._headers, "Accept": "application/vnd.github+json"},
+                headers=req_headers,
             ) as resp:
                 log.debug(
                     "github_search  response  status=%d  query=%r",
                     resp.status,
                     query,
                 )
+                if resp.status == 429 and self._rate_limiter is not None and not _retried:
+                    pause = self._rate_limiter.get_backoff_pause("github")
+                    log.warning(
+                        "github_search  429 rate-limited  backoff=%.0fs  query=%r",
+                        pause, query,
+                    )
+                    await asyncio.sleep(pause)
+                    return await self.search_github(
+                        query, per_page=per_page, page=page, _retried=True
+                    )
                 if resp.status in (403, 422, 503):
                     log.warning(
                         "github_search  skipped  status=%d  query=%r",
@@ -315,6 +338,8 @@ class FileExtractor:
         per_page: int = 20,
         page: int = 1,
         gitlab_token: Optional[str] = None,
+        *,
+        _retried: bool = False,
     ) -> list[str]:
         """Call the GitLab Code Search API and return raw-content URLs.
 
@@ -324,6 +349,8 @@ class FileExtractor:
 
         Reference: https://docs.gitlab.com/ee/api/search.html
         """
+        if self._rate_limiter is not None:
+            await self._rate_limiter.acquire("gitlab")
         params = {
             "scope": "blobs",
             "search": query,
@@ -334,6 +361,9 @@ class FileExtractor:
         extra_headers: dict[str, str] = {}
         if gitlab_token:
             extra_headers["PRIVATE-TOKEN"] = gitlab_token
+        req_headers = {**self._headers, **extra_headers}
+        if self._rate_limiter is not None:
+            req_headers = self._rate_limiter.get_headers(req_headers)
         log.debug("gitlab_search  query=%r  per_page=%d  page=%d", query, per_page, page)
         try:
             if self._session is None:
@@ -343,13 +373,27 @@ class FileExtractor:
             async with self._session.get(
                 api_url,
                 params=params,
-                headers={**self._headers, **extra_headers},
+                headers=req_headers,
             ) as resp:
                 log.debug(
                     "gitlab_search  response  status=%d  query=%r",
                     resp.status,
                     query,
                 )
+                if resp.status == 429 and self._rate_limiter is not None and not _retried:
+                    pause = self._rate_limiter.get_backoff_pause("gitlab")
+                    log.warning(
+                        "gitlab_search  429 rate-limited  backoff=%.0fs  query=%r",
+                        pause, query,
+                    )
+                    await asyncio.sleep(pause)
+                    return await self.search_gitlab(
+                        query,
+                        per_page=per_page,
+                        page=page,
+                        gitlab_token=gitlab_token,
+                        _retried=True,
+                    )
                 if resp.status in (401, 403, 422, 503):
                     log.warning(
                         "gitlab_search  skipped  status=%d  query=%r",
