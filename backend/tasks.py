@@ -42,7 +42,7 @@ async def run_crawl_job(job_id: str, request: CrawlJobRequest, settings: Setting
             use_github=request.use_github,
             use_gitlab=request.use_gitlab,
             use_web_search=request.use_web_search,
-            web_search_engines=tuple(request.web_search_engines),
+            web_search_engines=tuple(request.engines),
             web_dork_sources=request.web_dork_sources,
             max_web_dorks=request.max_web_dorks,
             max_queries=request.max_queries,

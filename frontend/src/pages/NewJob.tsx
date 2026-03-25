@@ -8,9 +8,9 @@ type Mode = "crawl" | "scan";
 export function NewJob() {
   const [mode, setMode] = useState<Mode>("crawl");
   const [urlsText, setUrlsText] = useState("");
-  const [tokens, setTokens] = useState("");
   const [engines, setEngines] = useState("duckduckgo,google,bing");
   const [maxQueries, setMaxQueries] = useState(20);
+  const [maxWebDorks, setMaxWebDorks] = useState(20);
   const [depth, setDepth] = useState(2);
   const [useGithub, setUseGithub] = useState(true);
   const [useGitlab, setUseGitlab] = useState(false);
@@ -38,9 +38,9 @@ export function NewJob() {
           use_gitlab: useGitlab,
           use_web_search: useWebSearch,
           engines: engines.split(",").map((e) => e.trim()).filter(Boolean),
+          max_web_dorks: maxWebDorks,
           max_queries: maxQueries,
           depth,
-          tokens: tokens.split(/\n|,/).map((t) => t.trim()).filter(Boolean),
         });
       }
       setJob(created);
@@ -86,24 +86,26 @@ export function NewJob() {
               <Checkbox label="Web Search" checked={useWebSearch} onChange={setUseWebSearch} />
             </div>
 
-            <Label>Search tokens (comma-separated)</Label>
-            <input
-              value={tokens}
-              onChange={(e) => setTokens(e.target.value)}
-              style={inputStyle}
-              placeholder="AI agent, openai, langchain, autogen"
-            />
-
             <Label>Engines (comma-separated)</Label>
             <input value={engines} onChange={(e) => setEngines(e.target.value)} style={inputStyle} />
 
-            <div style={{ display: "flex", gap: "1rem" }}>
+            <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
               <div style={{ flex: 1 }}>
-                <Label>Max queries</Label>
+                <Label>Max queries (GitHub/GitLab)</Label>
                 <input
                   type="number"
                   value={maxQueries}
                   onChange={(e) => setMaxQueries(Number(e.target.value))}
+                  style={inputStyle}
+                  min={1}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <Label>Max web dorks</Label>
+                <input
+                  type="number"
+                  value={maxWebDorks}
+                  onChange={(e) => setMaxWebDorks(Number(e.target.value))}
                   style={inputStyle}
                   min={1}
                 />

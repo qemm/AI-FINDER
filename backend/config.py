@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     gitlab_token: Optional[str] = None
 
     # Logging — set LOG_LEVEL=DEBUG to see every HTTP request/dork/engine call
-    log_level: str = "INFO"
+    log_level: str = "DEBUG"
 
     # CORS — comma-separated list of allowed origins
     cors_origins: str = "http://localhost:5173,http://localhost:3000"

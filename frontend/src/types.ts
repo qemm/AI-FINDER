@@ -46,10 +46,12 @@ export interface CrawlJobRequest {
   use_gitlab?: boolean;
   use_web_search?: boolean;
   engines?: string[];
+  max_web_dorks?: number;
   target_url?: string;
   max_queries?: number;
   depth?: number;
-  tokens?: string[];
+  github_token?: string;
+  gitlab_token?: string;
 }
 
 export interface ScanJobRequest {

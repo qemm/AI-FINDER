@@ -28,11 +28,11 @@ class CrawlJobRequest(BaseModel):
     use_github: bool = True
     use_gitlab: bool = True
     use_web_search: bool = False
-    web_search_engines: list[str] = ["duckduckgo", "bing"]
+    engines: list[str] = ["duckduckgo", "bing", "google"]
     web_dork_sources: str = "all"
     target_url: Optional[str] = None
     max_queries: Optional[int] = None
-    max_web_dorks: Optional[int] = 5
+    max_web_dorks: Optional[int] = 20
     depth: int = 2
     check_reachability: bool = True
     github_token: Optional[str] = None
