@@ -46,6 +46,7 @@ export interface CrawlJobRequest {
   use_gitlab?: boolean;
   use_web_search?: boolean;
   engines?: string[];
+  web_dork_sources?: "all" | "web" | "github";
   max_web_dorks?: number;
   target_url?: string;
   max_queries?: number;

@@ -27,7 +27,7 @@ class Page(BaseModel, Generic[T]):
 class CrawlJobRequest(BaseModel):
     use_github: bool = True
     use_gitlab: bool = True
-    use_web_search: bool = False
+    use_web_search: bool = True
     engines: list[str] = ["duckduckgo", "bing", "google"]
     web_dork_sources: str = "all"
     target_url: Optional[str] = None

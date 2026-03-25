@@ -210,7 +210,14 @@ class FileExtractor:
     # ------------------------------------------------------------------
 
     async def fetch(self, url: str) -> ExtractedFile:
-        """Fetch *url* and return an :class:`ExtractedFile`."""
+        """Fetch *url* and return an :class:`ExtractedFile`.
+
+        When the server returns an HTML page (``Content-Type: text/html``)
+        the markup is automatically stripped to plain text via BeautifulSoup
+        so that content from arbitrary websites (docs portals, personal sites,
+        S3-backed pages, …) is processed the same way as raw ``.md``/``.txt``
+        files from GitHub/GitLab.
+        """
         raw_url = to_raw_url(url)
         log.debug("fetch  url=%s  raw_url=%s", url, raw_url)
         req_headers = (
@@ -226,11 +233,13 @@ class FileExtractor:
                 )
             async with self._session.get(raw_url, headers=req_headers) as resp:
                 resp.raise_for_status()
-                text = await resp.text(errors="replace")
-                log.debug(
-                    "fetch  OK  status=%d  bytes=%d  url=%s",
+                content_type = resp.headers.get("Content-Type", "").lower()
+                raw_text = await resp.text(errors="replace")
+                log.info(
+                    "fetch  OK  status=%d  content_type=%s  bytes=%d  url=%s",
                     resp.status,
-                    len(text),
+                    content_type.split(";")[0].strip(),
+                    len(raw_text),
                     url,
                 )
         except Exception as exc:  # noqa: BLE001
@@ -242,6 +251,13 @@ class FileExtractor:
                 error=str(exc),
             )
 
+        # Strip HTML markup → plain text so regex patterns work on any webpage.
+        is_html = "text/html" in content_type
+        text = self._html_to_text(raw_text) if is_html else raw_text
+        if is_html:
+            log.debug("fetch  html_stripped  chars_before=%d  chars_after=%d  url=%s",
+                      len(raw_text), len(text), url)
+
         content_hash = hashlib.sha256(text.encode()).hexdigest()
         blocks = self._extract_system_prompts(text)
 
@@ -250,7 +266,12 @@ class FileExtractor:
             raw_content=text,
             content_hash=content_hash,
             system_prompt_blocks=blocks,
-            metadata={"raw_url": raw_url, "length": len(text)},
+            metadata={
+                "raw_url": raw_url,
+                "length": len(text),
+                "content_type": content_type.split(";")[0].strip(),
+                "is_html": is_html,
+            },
         )
 
     async def fetch_many(
@@ -425,6 +446,22 @@ class FileExtractor:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _html_to_text(html: str) -> str:
+        """Strip HTML markup and return clean plain text.
+
+        Removes ``<script>`` and ``<style>`` elements entirely before
+        extracting visible text, so that JS/CSS noise does not pollute the
+        content that is later matched against system-prompt patterns.
+        """
+        try:
+            soup = BeautifulSoup(html, "lxml")
+            for tag in soup(["script", "style", "nav", "footer", "header"]):
+                tag.decompose()
+            return soup.get_text(separator="\n", strip=True)
+        except Exception:  # noqa: BLE001
+            return html
 
     @staticmethod
     def _extract_system_prompts(text: str) -> list[str]:

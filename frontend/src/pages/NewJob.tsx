@@ -9,6 +9,7 @@ export function NewJob() {
   const [mode, setMode] = useState<Mode>("crawl");
   const [urlsText, setUrlsText] = useState("");
   const [engines, setEngines] = useState("duckduckgo,google,bing");
+  const [dorkSources, setDorkSources] = useState<"all" | "web" | "github">("all");
   const [maxQueries, setMaxQueries] = useState(20);
   const [maxWebDorks, setMaxWebDorks] = useState(20);
   const [depth, setDepth] = useState(2);
@@ -38,6 +39,7 @@ export function NewJob() {
           use_gitlab: useGitlab,
           use_web_search: useWebSearch,
           engines: engines.split(",").map((e) => e.trim()).filter(Boolean),
+          web_dork_sources: dorkSources,
           max_web_dorks: maxWebDorks,
           max_queries: maxQueries,
           depth,
@@ -88,6 +90,20 @@ export function NewJob() {
 
             <Label>Engines (comma-separated)</Label>
             <input value={engines} onChange={(e) => setEngines(e.target.value)} style={inputStyle} />
+
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+              <Label>Dork sources:</Label>
+              {(["all", "web", "github"] as const).map((src) => (
+                <button
+                  key={src}
+                  type="button"
+                  onClick={() => setDorkSources(src)}
+                  style={{ ...btnStyle, padding: "0.3rem 0.8rem", background: dorkSources === src ? "#89b4fa" : "#313244", color: dorkSources === src ? "#1e1e2e" : "#cdd6f4" }}
+                >
+                  {src === "all" ? "all (github + open-web)" : src === "web" ? "open-web only" : "github only"}
+                </button>
+              ))}
+            </div>
 
             <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
               <div style={{ flex: 1 }}>
