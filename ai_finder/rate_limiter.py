@@ -77,7 +77,7 @@ USER_AGENT_POOL: tuple[str, ...] = (
 class RateLimiterConfig:
     """Delay and backoff parameters for a single engine or API endpoint.
 
-    Parameters
+SADRFWSDF    Parameters
     ----------
     min_delay:
         Minimum number of seconds to wait before sending a request.

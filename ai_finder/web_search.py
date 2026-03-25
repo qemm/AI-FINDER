@@ -175,6 +175,10 @@ class WebSearcher:
         self._request_delay = request_delay
         self._captcha_pause = captcha_pause
         self._rate_limiter = rate_limiter if rate_limiter is not None else RateLimiter()
+        # Engines that have been blocked (CAPTCHA / persistent 429) during
+        # this session.  Once an engine is added here every subsequent query
+        # is skipped immediately without making an HTTP request.
+        self._blocked_engines: set[str] = set()
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -218,6 +222,8 @@ class WebSearcher:
         list[str]
             External HTTP/HTTPS URLs extracted from the result page.
         """
+        if "duckduckgo" in self._blocked_engines:
+            return []
         log.info("duckduckgo  query=%r", query)
         await self._rate_limiter.acquire("duckduckgo")
         html = await self._fetch_page(
@@ -252,6 +258,8 @@ class WebSearcher:
         list[str]
             External HTTP/HTTPS URLs extracted from the result page.
         """
+        if "google" in self._blocked_engines:
+            return []
         log.info("google  query=%r", query)
         await self._rate_limiter.acquire("google")
         html = await self._fetch_page(
@@ -283,6 +291,8 @@ class WebSearcher:
         list[str]
             External HTTP/HTTPS URLs extracted from the result page.
         """
+        if "yandex" in self._blocked_engines:
+            return []
         log.info("yandex  query=%r", query)
         await self._rate_limiter.acquire("yandex")
         html = await self._fetch_page(
@@ -292,12 +302,6 @@ class WebSearcher:
             headers=self._rate_limiter.get_headers(self._headers),
         )
         if not html:
-            log.info(
-                "yandex  blocked or no results  query=%r  "
-                "— Yandex is rate-limiting / showing a CAPTCHA; "
-                "try removing 'yandex' from --web-search-engines",
-                query,
-            )
             return []
         urls = self._extract_urls_from_html(html)
         log.info("yandex  found=%d  query=%r", len(urls), query)
@@ -323,6 +327,8 @@ class WebSearcher:
         list[str]
             External HTTP/HTTPS URLs extracted from the result page.
         """
+        if "bing" in self._blocked_engines:
+            return []
         log.info("bing  query=%r", query)
         await self._rate_limiter.acquire("bing")
         html = await self._fetch_page(
@@ -447,6 +453,13 @@ class WebSearcher:
             all_urls.extend(urls)
 
         result = list(dict.fromkeys(all_urls))
+        if self._blocked_engines:
+            log.warning(
+                "search_with_dorks  blocked_engines=%s  "
+                "(CAPTCHA or persistent rate-limit — consider removing them "
+                "or adding proxy support)",
+                sorted(self._blocked_engines),
+            )
         log.info("search_with_dorks  total_unique=%d", len(result))
         return result
 
@@ -530,14 +543,26 @@ class WebSearcher:
                                 url, params,
                                 engine=engine, headers=headers, _retry=True,
                             )
+                        # Trip the circuit breaker — skip this engine for the
+                        # rest of the session to avoid flooding logs.
+                        self._blocked_engines.add(engine)
                         log.warning(
                             "_fetch_page  CAPTCHA/bot-block detected  "
                             "engine=%s  final_url=%s  "
-                            "— skipping (captcha_pause=False or retry exhausted)",
-                            url,
+                            "— engine disabled for this session",
+                            engine,
                             final_url,
                         )
                         return ""
+                if resp.status == 403:
+                    # Many engines return 403 when they detect bot traffic.
+                    self._blocked_engines.add(engine)
+                    log.warning(
+                        "_fetch_page  403 bot-block  engine=%s  url=%s  "
+                        "— engine disabled for this session",
+                        engine, url,
+                    )
+                    return ""
                 if resp.status == 429:
                     if not _retry:
                         pause = self._rate_limiter.get_backoff_pause(engine)
@@ -551,8 +576,11 @@ class WebSearcher:
                             url, params,
                             engine=engine, headers=headers, _retry=True,
                         )
+                    # Retry exhausted — trip circuit breaker.
+                    self._blocked_engines.add(engine)
                     log.warning(
-                        "_fetch_page  429 retry exhausted  engine=%s  url=%s",
+                        "_fetch_page  429 retry exhausted  engine=%s  url=%s  "
+                        "— engine disabled for this session",
                         engine, url,
                     )
                     return ""
