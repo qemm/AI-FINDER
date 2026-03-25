@@ -32,6 +32,10 @@ async def run_crawl_job(job_id: str, request: CrawlJobRequest, settings: Setting
             github_token=github_token,
             gitlab_token=gitlab_token,
             captcha_pause=False,
+            proxy=settings.https_proxy,
+            google_cse_key=settings.google_cse_key,
+            google_cse_id=settings.google_cse_id,
+            brave_search_key=settings.brave_search_key,
         )
 
         await store.emit(job_id, "status", {"phase": "crawling"})

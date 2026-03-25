@@ -28,7 +28,7 @@ class CrawlJobRequest(BaseModel):
     use_github: bool = True
     use_gitlab: bool = True
     use_web_search: bool = True
-    engines: list[str] = ["duckduckgo", "bing", "google"]
+    engines: list[str] = ["duckduckgo", "bing"]
     web_dork_sources: str = "all"
     target_url: Optional[str] = None
     max_queries: Optional[int] = None

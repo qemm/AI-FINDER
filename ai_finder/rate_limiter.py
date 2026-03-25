@@ -101,13 +101,17 @@ SADRFWSDF    Parameters
 
 #: Default per-engine rate limiting configuration.
 DEFAULT_CONFIGS: dict[str, RateLimiterConfig] = {
-    "duckduckgo": RateLimiterConfig(min_delay=3.0,  max_delay=7.0,  backoff_pause=45.0),
-    "google":     RateLimiterConfig(min_delay=10.0, max_delay=20.0, backoff_pause=120.0),
-    "bing":       RateLimiterConfig(min_delay=4.0,  max_delay=9.0,  backoff_pause=60.0),
-    "yandex":     RateLimiterConfig(min_delay=5.0,  max_delay=12.0, backoff_pause=90.0),
-    "github":     RateLimiterConfig(min_delay=2.0,  max_delay=4.0,  backoff_pause=60.0),
-    "gitlab":     RateLimiterConfig(min_delay=1.0,  max_delay=3.0,  backoff_pause=30.0),
-    "default":    RateLimiterConfig(min_delay=1.0,  max_delay=3.0,  backoff_pause=30.0),
+    "duckduckgo": RateLimiterConfig(min_delay=3.0,  max_delay=7.0,   backoff_pause=45.0),
+    "google":     RateLimiterConfig(min_delay=10.0, max_delay=20.0,  backoff_pause=120.0),
+    "bing":       RateLimiterConfig(min_delay=4.0,  max_delay=9.0,   backoff_pause=60.0),
+    "yandex":     RateLimiterConfig(min_delay=5.0,  max_delay=12.0,  backoff_pause=90.0),
+    # Official JSON APIs — light delay only, no scraping = no CAPTCHA.
+    # backoff_pause for google_cse is 2 h because 429 = daily quota exhausted.
+    "google_cse": RateLimiterConfig(min_delay=1.0,  max_delay=2.0,   backoff_pause=7200.0),
+    "brave":      RateLimiterConfig(min_delay=1.0,  max_delay=2.0,   backoff_pause=60.0),
+    "github":     RateLimiterConfig(min_delay=2.0,  max_delay=4.0,   backoff_pause=60.0),
+    "gitlab":     RateLimiterConfig(min_delay=1.0,  max_delay=3.0,   backoff_pause=30.0),
+    "default":    RateLimiterConfig(min_delay=1.0,  max_delay=3.0,   backoff_pause=30.0),
 }
 
 # ---------------------------------------------------------------------------

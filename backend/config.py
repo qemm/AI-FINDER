@@ -23,6 +23,18 @@ class Settings(BaseSettings):
     # Logging — set LOG_LEVEL=DEBUG to see every HTTP request/dork/engine call
     log_level: str = "DEBUG"
 
+    # Web search — official API keys avoid CAPTCHAs entirely.
+    # Google Custom Search (100 free queries/day):
+    #   https://developers.google.com/custom-search/v1/introduction
+    google_cse_key: Optional[str] = None   # API key
+    google_cse_id: Optional[str] = None    # Custom Search Engine ID ("cx")
+    # Brave Search API (2 000 free queries/month):
+    #   https://api.search.brave.com
+    brave_search_key: Optional[str] = None
+    # Optional HTTP/SOCKS5 proxy for scraping engines (helps with IP blocks).
+    # Examples: http://user:pass@host:3128   socks5://host:1080
+    https_proxy: Optional[str] = None
+
     # CORS — comma-separated list of allowed origins
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 

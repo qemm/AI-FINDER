@@ -202,6 +202,10 @@ class WebSearcher:
         request_delay: float = 2.0,
         captcha_pause: bool = True,
         rate_limiter: Optional[RateLimiter] = None,
+        proxy: Optional[str] = None,
+        google_cse_key: Optional[str] = None,
+        google_cse_id: Optional[str] = None,
+        brave_search_key: Optional[str] = None,
     ) -> None:
         self._session = session
         self._owns_session = session is None
@@ -210,10 +214,20 @@ class WebSearcher:
         self._request_delay = request_delay
         self._captcha_pause = captcha_pause
         self._rate_limiter = rate_limiter if rate_limiter is not None else RateLimiter()
+        self._proxy = proxy
+        self._google_cse_key = google_cse_key
+        self._google_cse_id = google_cse_id
+        self._brave_search_key = brave_search_key
         # Engines that have been blocked (CAPTCHA / persistent 429) during
         # this session.  Once an engine is added here every subsequent query
         # is skipped immediately without making an HTTP request.
         self._blocked_engines: set[str] = set()
+        if proxy:
+            log.info("WebSearcher  proxy=%s", proxy)
+        if google_cse_key and google_cse_id:
+            log.info("WebSearcher  google_cse enabled  cx=%s", google_cse_id)
+        if brave_search_key:
+            log.info("WebSearcher  brave enabled")
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -382,6 +396,109 @@ class WebSearcher:
         log.info("bing  found=%d  query=%r", len(urls), query)
         return urls[:max_results]
 
+    async def search_google_cse(
+        self, query: str, *, max_results: int = 10
+    ) -> list[str]:
+        """Search via Google Custom Search JSON API — no scraping, no CAPTCHA.
+
+        Requires ``GOOGLE_CSE_KEY`` and ``GOOGLE_CSE_ID`` env vars.
+        Free quota: 100 queries/day.  Returns ``[]`` silently when
+        credentials are absent.
+
+        Setup: https://developers.google.com/custom-search/v1/introduction
+        """
+        if not (self._google_cse_key and self._google_cse_id):
+            return []
+        if "google_cse" in self._blocked_engines:
+            return []
+        log.info("google_cse  query=%r", query)
+        await self._rate_limiter.acquire("google_cse")
+        try:
+            assert self._session is not None, "Call inside async context manager"
+            async with self._session.get(
+                "https://www.googleapis.com/customsearch/v1",
+                params={
+                    "key": self._google_cse_key,
+                    "cx": self._google_cse_id,
+                    "q": query,
+                    "num": min(max_results, 10),  # CSE max per request is 10
+                },
+            ) as resp:
+                if resp.status == 429:
+                    self._blocked_engines.add("google_cse")
+                    log.warning(
+                        "google_cse  daily quota exhausted  "
+                        "\u2014 engine disabled for this session"
+                    )
+                    return []
+                if resp.status != 200:
+                    log.warning("google_cse  non-200  status=%d", resp.status)
+                    return []
+                data = await resp.json()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("google_cse  error  %s", exc)
+            return []
+        urls = [
+            item["link"]
+            for item in data.get("items", [])
+            if item.get("link") and not self._is_excluded(item["link"])
+        ]
+        log.info("google_cse  found=%d  query=%r", len(urls), query)
+        return urls[:max_results]
+
+    async def search_brave(
+        self, query: str, *, max_results: int = 10
+    ) -> list[str]:
+        """Search via Brave Search API — no scraping, no CAPTCHA.
+
+        Requires ``BRAVE_SEARCH_KEY`` env var.
+        Free quota: 2 000 queries/month.  Returns ``[]`` silently when
+        credentials are absent.
+
+        Setup: https://api.search.brave.com
+        """
+        if not self._brave_search_key:
+            return []
+        if "brave" in self._blocked_engines:
+            return []
+        log.info("brave  query=%r", query)
+        await self._rate_limiter.acquire("brave")
+        try:
+            assert self._session is not None, "Call inside async context manager"
+            async with self._session.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": query, "count": min(max_results, 20)},
+                headers={
+                    "X-Subscription-Token": self._brave_search_key,
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                },
+            ) as resp:
+                if resp.status == 429:
+                    pause = self._rate_limiter.get_backoff_pause("brave")
+                    log.warning(
+                        "brave  429 rate-limited  backoff=%.0fs  "
+                        "\u2014 engine disabled for this session", pause
+                    )
+                    await asyncio.sleep(pause)
+                    self._blocked_engines.add("brave")
+                    return []
+                if resp.status != 200:
+                    log.warning("brave  non-200  status=%d", resp.status)
+                    return []
+                data = await resp.json()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("brave  error  %s", exc)
+            return []
+        results = data.get("web", {}).get("results", [])
+        urls = [
+            r["url"]
+            for r in results
+            if r.get("url") and not self._is_excluded(r["url"])
+        ]
+        log.info("brave  found=%d  query=%r", len(urls), query)
+        return urls[:max_results]
+
     async def search_all(
         self,
         query: str,
@@ -411,6 +528,10 @@ class WebSearcher:
             "google": self.search_google,
             "bing": self.search_bing,
             "yandex": self.search_yandex,
+            # Official JSON API engines — no scraping, no CAPTCHA.
+            # Active only when corresponding API keys are configured.
+            "google_cse": self.search_google_cse,
+            "brave": self.search_brave,
         }
         combined: list[str] = []
         for engine_name in engines:
@@ -575,7 +696,8 @@ class WebSearcher:
                 **_ENGINE_HEADERS.get(engine, {}),
             }
             async with self._session.get(
-                url, params=params, headers=merged_headers
+                url, params=params, headers=merged_headers,
+                proxy=self._proxy,
             ) as resp:
                 final_url = str(resp.url)
                 # Detect CAPTCHA / bot-block redirects before reading the body.
@@ -638,6 +760,16 @@ class WebSearcher:
         except Exception as exc:  # noqa: BLE001
             log.warning("_fetch_page  error  url=%s  error=%s", url, exc)
             return ""
+
+    @staticmethod
+    def _is_excluded(url: str, exclude: frozenset[str] = _EXCLUDED_DOMAINS) -> bool:
+        """Return ``True`` if *url* belongs to one of the excluded domains."""
+        try:
+            netloc = urlparse(url).netloc.lower()
+            base = netloc[4:] if netloc.startswith("www.") else netloc
+            return base in exclude or netloc in exclude
+        except Exception:  # noqa: BLE001
+            return False
 
     @staticmethod
     def _extract_urls_from_html(

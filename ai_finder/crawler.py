@@ -85,6 +85,10 @@ class Crawler:
         request_delay: float = 1.0,
         captcha_pause: bool = True,
         rate_limiter: Optional[RateLimiter] = None,
+        proxy: Optional[str] = None,
+        google_cse_key: Optional[str] = None,
+        google_cse_id: Optional[str] = None,
+        brave_search_key: Optional[str] = None,
     ) -> None:
         self._github_token = github_token
         self._gitlab_token = gitlab_token
@@ -93,6 +97,10 @@ class Crawler:
         self._request_delay = request_delay
         self._captcha_pause = captcha_pause
         self._rate_limiter = rate_limiter if rate_limiter is not None else RateLimiter()
+        self._proxy = proxy
+        self._google_cse_key = google_cse_key
+        self._google_cse_id = google_cse_id
+        self._brave_search_key = brave_search_key
 
     # ------------------------------------------------------------------
     # Public API
@@ -402,6 +410,10 @@ class Crawler:
                 request_delay=self._request_delay,
                 captcha_pause=self._captcha_pause,
                 rate_limiter=self._rate_limiter,
+                proxy=self._proxy,
+                google_cse_key=self._google_cse_key,
+                google_cse_id=self._google_cse_id,
+                brave_search_key=self._brave_search_key,
             ) as searcher:
                 web_urls = await searcher.search_with_dorks(
                     engines=web_search_engines,
