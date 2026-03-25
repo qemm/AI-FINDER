@@ -73,10 +73,45 @@ _SEARCH_USER_AGENT = (
 )
 
 #: Default HTTP headers sent with every search-engine request.
+#: These mirror what Chrome 120 sends on a typical page load, making the
+#: request look like a real browser visit rather than a programmatic scrape.
 _SEARCH_HEADERS: dict[str, str] = {
     "User-Agent": _SEARCH_USER_AGENT,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Sec-CH-UA": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+}
+
+#: Per-engine header overrides applied on top of _SEARCH_HEADERS.
+#: Google needs a Referer and slightly different Sec-Fetch-Site to look like
+#: follow-on navigation rather than a cold URL fetch.
+_ENGINE_HEADERS: dict[str, dict[str, str]] = {
+    "google": {
+        "Referer": "https://www.google.com/",
+        "Sec-Fetch-Site": "same-origin",
+    },
+    "bing": {
+        "Referer": "https://www.bing.com/",
+        "Sec-Fetch-Site": "same-origin",
+    },
+    "duckduckgo": {
+        "Referer": "https://duckduckgo.com/",
+        "Sec-Fetch-Site": "same-origin",
+    },
+    "yandex": {
+        "Referer": "https://yandex.com/",
+        "Sec-Fetch-Site": "same-origin",
+    },
 }
 
 
@@ -189,6 +224,10 @@ class WebSearcher:
             self._session = aiohttp.ClientSession(
                 timeout=self._timeout,
                 headers=self._headers,
+                # Persist cookies across requests so Google/Bing session
+                # cookies are sent back on subsequent queries, which is
+                # required to avoid instant bot-detection.
+                cookie_jar=aiohttp.CookieJar(),
                 trace_configs=[build_trace_config()],
             )
         return self
@@ -529,8 +568,14 @@ class WebSearcher:
         """
         try:
             assert self._session is not None, "Call inside async context manager"
+            # Merge base headers with per-engine overrides so each engine
+            # receives the Referer and Sec-Fetch-Site values it expects.
+            merged_headers = {
+                **(headers or {}),
+                **_ENGINE_HEADERS.get(engine, {}),
+            }
             async with self._session.get(
-                url, params=params, headers=headers
+                url, params=params, headers=merged_headers
             ) as resp:
                 final_url = str(resp.url)
                 # Detect CAPTCHA / bot-block redirects before reading the body.
