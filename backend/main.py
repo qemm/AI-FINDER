@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from ai_finder.logger import configure_logging
 from ai_finder.storage import Storage
 from backend.config import get_settings
 from backend.routers import export, files, jobs, search, secrets
@@ -10,7 +13,14 @@ from backend.schemas import DashboardStats, PlatformStat, SecretRuleStat
 
 _settings = get_settings()
 
-app = FastAPI(title="AI-FINDER API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    configure_logging(level=_settings.log_level)
+    yield
+
+
+app = FastAPI(title="AI-FINDER API", version="1.0.0", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
 # CORS — must be added before any route definitions

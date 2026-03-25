@@ -218,7 +218,7 @@ class WebSearcher:
         list[str]
             External HTTP/HTTPS URLs extracted from the result page.
         """
-        log.debug("duckduckgo  query=%r", query)
+        log.info("duckduckgo  query=%r", query)
         await self._rate_limiter.acquire("duckduckgo")
         html = await self._fetch_page(
             "https://html.duckduckgo.com/html/",
@@ -229,7 +229,7 @@ class WebSearcher:
         if not html:
             return []
         urls = self._extract_urls_from_html(html)
-        log.debug("duckduckgo  found=%d  query=%r", len(urls), query)
+        log.info("duckduckgo  found=%d  query=%r", len(urls), query)
         return urls[:max_results]
 
     async def search_google(
@@ -252,7 +252,7 @@ class WebSearcher:
         list[str]
             External HTTP/HTTPS URLs extracted from the result page.
         """
-        log.debug("google  query=%r", query)
+        log.info("google  query=%r", query)
         await self._rate_limiter.acquire("google")
         html = await self._fetch_page(
             "https://www.google.com/search",
@@ -263,7 +263,7 @@ class WebSearcher:
         if not html:
             return []
         urls = self._extract_urls_from_html(html)
-        log.debug("google  found=%d  query=%r", len(urls), query)
+        log.info("google  found=%d  query=%r", len(urls), query)
         return urls[:max_results]
 
     async def search_yandex(
@@ -283,7 +283,7 @@ class WebSearcher:
         list[str]
             External HTTP/HTTPS URLs extracted from the result page.
         """
-        log.debug("yandex  query=%r", query)
+        log.info("yandex  query=%r", query)
         await self._rate_limiter.acquire("yandex")
         html = await self._fetch_page(
             "https://yandex.com/search/",
@@ -300,7 +300,7 @@ class WebSearcher:
             )
             return []
         urls = self._extract_urls_from_html(html)
-        log.debug("yandex  found=%d  query=%r", len(urls), query)
+        log.info("yandex  found=%d  query=%r", len(urls), query)
         return urls[:max_results]
 
     async def search_bing(
@@ -323,7 +323,7 @@ class WebSearcher:
         list[str]
             External HTTP/HTTPS URLs extracted from the result page.
         """
-        log.debug("bing  query=%r", query)
+        log.info("bing  query=%r", query)
         await self._rate_limiter.acquire("bing")
         html = await self._fetch_page(
             "https://www.bing.com/search",
@@ -334,7 +334,7 @@ class WebSearcher:
         if not html:
             return []
         urls = self._extract_urls_from_html(html)
-        log.debug("bing  found=%d  query=%r", len(urls), query)
+        log.info("bing  found=%d  query=%r", len(urls), query)
         return urls[:max_results]
 
     async def search_all(
@@ -441,7 +441,7 @@ class WebSearcher:
                 engines=engines,
                 max_results=max_results_per_query,
             )
-            log.debug(
+            log.info(
                 "search_with_dorks  dork=%r  found=%d", dork.query, len(urls)
             )
             all_urls.extend(urls)
