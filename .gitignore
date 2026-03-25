@@ -21,6 +21,7 @@ env/
 # Secrets / env
 .env
 *.env
+env
 
 # Database / storage output
 *.db
