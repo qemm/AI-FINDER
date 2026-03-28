@@ -206,6 +206,107 @@ class Storage:
             row = conn.execute("SELECT COUNT(*) FROM files").fetchone()
             return int(row[0])
 
+    def get_by_id(self, file_id: int) -> Optional[dict]:
+        """Return a single file row by primary key, or ``None``."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM files WHERE id = ?", (file_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_secret_findings(self, file_id: int) -> list[dict]:
+        """Return all secret findings associated with *file_id*."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM secret_findings WHERE file_id = ?", (file_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_filtered(
+        self,
+        platform: Optional[str] = None,
+        has_secrets: Optional[bool] = None,
+        search: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Return a filtered, paginated list of file rows."""
+        query = "SELECT * FROM files WHERE 1=1"
+        params: list = []
+        if platform:
+            query += " AND platform = ?"
+            params.append(platform)
+        if has_secrets is not None:
+            query += " AND has_secrets = ?"
+            params.append(1 if has_secrets else 0)
+        if search:
+            like = f"%{search}%"
+            query += " AND (url LIKE ? OR tags LIKE ? OR raw_content LIKE ?)"
+            params.extend([like, like, like])
+        query += " ORDER BY indexed_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        with self._conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
+
+    def count_filtered(
+        self,
+        platform: Optional[str] = None,
+        has_secrets: Optional[bool] = None,
+        search: Optional[str] = None,
+    ) -> int:
+        """Return the total number of rows matching the given filters."""
+        query = "SELECT COUNT(*) FROM files WHERE 1=1"
+        params: list = []
+        if platform:
+            query += " AND platform = ?"
+            params.append(platform)
+        if has_secrets is not None:
+            query += " AND has_secrets = ?"
+            params.append(1 if has_secrets else 0)
+        if search:
+            like = f"%{search}%"
+            query += " AND (url LIKE ? OR tags LIKE ? OR raw_content LIKE ?)"
+            params.extend([like, like, like])
+        with self._conn() as conn:
+            row = conn.execute(query, params).fetchone()
+            return int(row[0])
+
+    def stats(self) -> dict:
+        """Return aggregate statistics about the stored data."""
+        with self._conn() as conn:
+            total = int(
+                conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            )
+            with_secrets = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM files WHERE has_secrets = 1"
+                ).fetchone()[0]
+            )
+            total_secret_findings = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM secret_findings"
+                ).fetchone()[0]
+            )
+            by_platform_rows = conn.execute(
+                "SELECT platform, COUNT(*) as cnt FROM files "
+                "GROUP BY platform ORDER BY cnt DESC"
+            ).fetchall()
+        return {
+            "total": total,
+            "with_secrets": with_secrets,
+            "total_secret_findings": total_secret_findings,
+            "by_platform": {row["platform"]: row["cnt"] for row in by_platform_rows},
+        }
+
+    def list_platforms(self) -> list[str]:
+        """Return the list of distinct platform labels present in the database."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT platform FROM files ORDER BY platform"
+            ).fetchall()
+            return [row["platform"] for row in rows]
+
     # ------------------------------------------------------------------
     # Export
     # ------------------------------------------------------------------

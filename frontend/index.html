@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI-FINDER — OSINT Engine for AI Agents</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+<!-- ============================================================
+     HEADER / NAV
+     ============================================================ -->
+<header class="site-header">
+  <div class="header-inner">
+    <a class="logo" href="#" onclick="showView('dashboard');return false;">
+      <span class="logo-icon">🤖</span>
+      <span>
+        AI-FINDER
+        <span class="logo-tag">OSINT engine for AI agents</span>
+      </span>
+    </a>
+
+    <nav class="site-nav">
+      <button class="nav-btn" data-view="dashboard">📊 Dashboard</button>
+      <button class="nav-btn" data-view="results">🔍 Results</button>
+      <button class="nav-btn" data-view="scan">🎯 Scan</button>
+      <button class="nav-btn" data-view="crawl">🕷️ Crawl</button>
+      <button class="nav-btn" data-view="dorks">📝 Dorks</button>
+    </nav>
+
+    <div class="header-right">
+      <span class="badge-version">v0.1.0</span>
+      <a href="/docs" target="_blank" style="font-size:.85rem;color:var(--text-muted)">API Docs ↗</a>
+    </div>
+  </div>
+</header>
+
+<!-- ============================================================
+     MAIN
+     ============================================================ -->
+<main class="site-main">
+
+  <!-- ──────────────────────────────────────────────────────────
+       DASHBOARD VIEW
+       ────────────────────────────────────────────────────────── -->
+  <section id="view-dashboard" class="view">
+
+    <div class="hero">
+      <h1>AI Agent Configuration Intelligence</h1>
+      <p>Discover, extract and classify AI agent config files exposed in public repositories.</p>
+
+      <form id="hero-search-form" class="search-wrap" style="max-width:680px;margin:0 auto;">
+        <input id="hero-search" class="search-input" type="text"
+               placeholder="Search findings — URLs, tags, platforms, content…" autocomplete="off" />
+        <button type="submit" class="search-btn">Search</button>
+      </form>
+    </div>
+
+    <!-- Stats bar -->
+    <div class="stats-bar">
+      <div class="stat-card accent">
+        <div class="stat-value" id="stat-total">—</div>
+        <div class="stat-label">Configs Found</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-platforms">—</div>
+        <div class="stat-label">Platforms Detected</div>
+      </div>
+      <div class="stat-card danger">
+        <div class="stat-value" id="stat-secrets">—</div>
+        <div class="stat-label">Files With Secrets</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-findings">—</div>
+        <div class="stat-label">Secret Findings</div>
+      </div>
+    </div>
+
+    <!-- Platform breakdown -->
+    <div id="platform-breakdown" class="platform-grid"></div>
+
+    <!-- Recent findings -->
+    <div style="font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:.75rem;">
+      Recent Findings
+    </div>
+    <div id="recent-results" class="results-list"></div>
+
+    <div style="margin-top:1rem;">
+      <button class="btn btn-secondary" onclick="showView('results')">View all results →</button>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────────────────────────────────────
+       RESULTS VIEW
+       ────────────────────────────────────────────────────────── -->
+  <section id="view-results" class="view">
+
+    <div class="filter-bar">
+      <!-- Inline search -->
+      <form id="results-search-form" style="display:flex;gap:.5rem;">
+        <input id="results-search-input" class="form-input" type="text"
+               placeholder="Search…" style="width:220px;" />
+        <button type="submit" class="btn btn-secondary">Go</button>
+      </form>
+
+      <label>
+        Platform:
+        <select id="filter-platform" class="filter-select">
+          <option value="">All platforms</option>
+        </select>
+      </label>
+
+      <label class="filter-toggle">
+        <input type="checkbox" id="filter-secrets" />
+        ⚠ Secrets only
+      </label>
+
+      <span class="result-count" id="results-count"></span>
+    </div>
+
+    <div id="results-list" class="results-list"></div>
+    <div id="results-pagination" class="pagination"></div>
+  </section>
+
+  <!-- ──────────────────────────────────────────────────────────
+       SCAN VIEW
+       ────────────────────────────────────────────────────────── -->
+  <section id="view-scan" class="view">
+    <div class="form-card">
+      <h2>🎯 Scan URLs</h2>
+      <p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1.25rem;">
+        Provide a list of URLs to fetch and analyse, or enable API-based discovery
+        to find more targets automatically.
+      </p>
+
+      <form id="scan-form">
+        <div class="form-group">
+          <label for="scan-urls">URLs (one per line)</label>
+          <textarea id="scan-urls" class="form-textarea"
+                    placeholder="https://raw.githubusercontent.com/…/CLAUDE.md&#10;https://gitlab.com/…/-/raw/…"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>API-based discovery</label>
+          <label class="form-check">
+            <input type="checkbox" id="scan-github" />
+            GitHub Code Search
+          </label>
+          <label class="form-check">
+            <input type="checkbox" id="scan-gitlab" />
+            GitLab Blob Search
+          </label>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="scan-github-token">GitHub Token (optional)</label>
+            <input id="scan-github-token" class="form-input" type="password"
+                   placeholder="ghp_…" autocomplete="off" />
+          </div>
+          <div class="form-group">
+            <label for="scan-gitlab-token">GitLab Token (optional)</label>
+            <input id="scan-gitlab-token" class="form-input" type="password"
+                   placeholder="glpat-…" autocomplete="off" />
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary">▶ Start Scan</button>
+      </form>
+
+      <div id="scan-job-box" class="job-box">
+        <div class="job-status-line"></div>
+        <div class="job-id"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────────────────────────────────────
+       CRAWL VIEW
+       ────────────────────────────────────────────────────────── -->
+  <section id="view-crawl" class="view">
+    <div class="form-card">
+      <h2>🕷️ Crawl &amp; Discover</h2>
+      <p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1.25rem;">
+        Crawl the GitHub and GitLab APIs to discover AI config file URLs, and/or
+        enumerate paths on a specific target domain (similar to gobuster/wfuzz).
+        Discovered URLs are appended to the configured file.
+      </p>
+
+      <form id="crawl-form">
+        <div class="form-group">
+          <label>Discovery sources</label>
+          <label class="form-check">
+            <input type="checkbox" id="crawl-use-github" checked />
+            GitHub Code Search
+          </label>
+          <label class="form-check">
+            <input type="checkbox" id="crawl-use-gitlab" checked />
+            GitLab Blob Search
+          </label>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="crawl-github-token">GitHub Token (optional)</label>
+            <input id="crawl-github-token" class="form-input" type="password"
+                   placeholder="ghp_…" autocomplete="off" />
+          </div>
+          <div class="form-group">
+            <label for="crawl-gitlab-token">GitLab Token (optional)</label>
+            <input id="crawl-gitlab-token" class="form-input" type="password"
+                   placeholder="glpat-…" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="crawl-target">Target domain (optional)</label>
+          <input id="crawl-target" class="form-input" type="url"
+                 placeholder="https://example.com" />
+          <small style="color:var(--text-muted);font-size:.78rem;">
+            Enumerate known AI config paths directly on this domain.
+          </small>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="crawl-max-queries">Max queries per platform</label>
+            <input id="crawl-max-queries" class="form-input" type="number"
+                   min="1" placeholder="unlimited" />
+          </div>
+          <div class="form-group">
+            <label for="crawl-urls-file">Output URLs file</label>
+            <input id="crawl-urls-file" class="form-input" type="text"
+                   value="urls.txt" />
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary">🕷️ Start Crawl</button>
+      </form>
+
+      <div id="crawl-job-box" class="job-box">
+        <div class="job-status-line"></div>
+        <div class="job-id"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────────────────────────────────────
+       DORKS VIEW
+       ────────────────────────────────────────────────────────── -->
+  <section id="view-dorks" class="view">
+    <div class="dorks-toolbar">
+      <button class="btn btn-secondary dork-type-btn active" data-type="google">Google Dorks</button>
+      <button class="btn btn-secondary dork-type-btn" data-type="s3">S3 Dorks</button>
+      <button class="btn btn-secondary dork-type-btn" data-type="github">GitHub Queries</button>
+      <button class="btn btn-secondary dork-type-btn" data-type="gitlab">GitLab Queries</button>
+    </div>
+
+    <table class="dorks-table">
+      <thead>
+        <tr>
+          <th>Query / Dork</th>
+          <th>Description</th>
+          <th>Tags</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="dorks-body"></tbody>
+    </table>
+  </section>
+
+</main><!-- /site-main -->
+
+<!-- ============================================================
+     DETAIL MODAL
+     ============================================================ -->
+<div id="modal-overlay" class="modal-overlay">
+  <div id="detail-modal" class="modal"></div>
+</div>
+
+<!-- ============================================================
+     TOAST CONTAINER
+     ============================================================ -->
+<div id="toast-container" class="toast-container"></div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
